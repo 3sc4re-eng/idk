@@ -12,6 +12,18 @@ Each entry must record:
 
 Keep previous entries as history; append corrections in a newer entry. Do not invent historical changes, successful tests, offset discovery, performance improvements, or hardware results.
 
+## 2026-11-02 — Update 008: repaired source uploaded and test ZIP verified
+
+**Changed:** Uploaded the completed source repairs and validation notes to `3sc4re-eng/idk`, source-repair commit `7e484ad` on `main`. The repository now contains 194 maintained files, including the two added compile-only fixture sources. Recorded the delivery evidence in this follow-up entry.
+
+**State:** Source upload and mini-PC package preparation completed. Package: `ACE-miniPC-20261102T125006Z.zip`, build `20261102T125006Z-515b457ddc`. Hardware verification is still pending.
+
+**Verification:** The push succeeded. Remote-ref/fetch verification and all 194 remote-tree object hashes match the current raw-byte source snapshot. All 114 bundle blocks match generated source. The ZIP passed CRC integrity checking, contains nine runtime/build/asset files plus empty configs and test/verification notes, and its embedded loader SHA-256 matches the verified product receipt. ZIP SHA-256: `b6dc20d9c3b41be312ef19c379f6b7d48823d505fd4f21d4de87718490ca85b1`. No product or test binary was executed here.
+
+**Limitations:** The test ZIP is a local delivery artifact; GitHub received source, tests, assets and documentation, not runtime DLLs or executables. The live limitations in Update 007 still apply. Repository visibility is controlled separately; instructions were supplied to the user, and no visibility change was made by the assistant.
+
+**Next:** Test this exact new build on the mini PC and collect its complete log before claiming that native aiming, automatic map collision or live cooldown behavior is fixed. Continue from the specific native joint/map/target-rejection evidence, preserving the user's settings and the source/build identity checks.
+
 ## 2026-11-02 — Update 007: fresh build and compile-only validation
 
 **Changed:** Built the focused repairs from Update 006 and prepared a new mini-PC test package. Updated `VERIFICATION.md` to distinguish this current build from the older receipts. Completed source, tests and this log are being synchronized to `3sc4re-eng/idk`.
