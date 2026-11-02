@@ -88,40 +88,34 @@ static void publish(live_backend::Frame&& f){
     Vec3 camera;bool camera_valid=f.matrix_valid&&collision::camera_origin(f.view.data(),camera);
     static std::map<u32,std::pair<u64,u64>> visible_times;
     for(auto it=visible_times.begin();it!=visible_times.end();)if(f.time-it->second.second>500)it=visible_times.erase(it);else ++it;
-    static visibility_cache::Rays visibility_rays;
     const auto collision_revision=collision::revision();
-    if(!camera_valid)visibility_rays.clear();
     auto ray_visibility=[&](Vec3 point){
-        visibility_cache::Answer answer;
-        if(!camera_valid||!visibility_cache::same(collision::revision(),collision_revision))return answer;
-        constexpr unsigned channels=collision::Vision|collision::Bullet;const u64 sampled=now_ms();
-        if(!visibility_rays.find(camera,point,collision_revision,channels,sampled,answer)){
-            auto ray=collision::trace_any(camera,point,channels);answer={ray.known,ray.clear};
-            if(!visibility_cache::same(collision::revision(),collision_revision))return visibility_cache::Answer{};
-            visibility_rays.remember(camera,point,collision_revision,channels,sampled,answer);
-        }else if(!visibility_cache::same(collision::revision(),collision_revision))return visibility_cache::Answer{};
+        visibility_cache::Answer answer;if(!camera_valid||!visibility_cache::same(collision::revision(),collision_revision))return answer;
+        const auto ray=collision::trace_any(camera,point,collision::Vision|collision::Bullet);
+        if(visibility_cache::same(collision::revision(),collision_revision))answer={ray.known,ray.clear};
         return answer;
     };
     auto visibility=[&](std::vector<Entity>& targets,bool allied,bool npc){for(auto& e:targets){
-        const bool team_known=npc||allied||e.visibility_known;e.team_visible=npc||allied?true:e.visible;e.bone_visible.fill(false);
+        const bool team_known=npc||allied||e.visibility_known;e.team_visible=npc||allied?true:e.visible;e.bone_visible.fill(false);e.bone_visibility_known.fill(false);
         // Team FOW can reject a target. A positive FOW flag never proves local LOS.
         if(!camera_valid||!team_known||!e.team_visible){
             e.occlusion_valid=false;e.visible=false;e.visibility_known=team_known&&!e.team_visible;visible_times.erase(e.handle);continue;
         }
-        bool any=false,on_screen=false,known=true;
+        bool any=false,on_screen=false,any_known=false;
         for(int i=0;i<7;i++){
-            Vec3 point;if(!target_geometry::region(e,i,point)){known=false;continue;}
+            if(!native_target::supports_region(i))continue;
+            Vec3 point;if(!native_target::point(e,i,point,f.native_binding_epoch,mem.attachment_epoch(),now_ms()))continue;
             float w=point.x*f.view[12]+point.y*f.view[13]+point.z*f.view[14]+f.view[15];
             if(std::isfinite(w)&&w>.01f){float x=(point.x*f.view[0]+point.y*f.view[1]+point.z*f.view[2]+f.view[3])/w,y=(point.x*f.view[4]+point.y*f.view[5]+point.z*f.view[6]+f.view[7])/w;on_screen|=std::isfinite(x)&&std::isfinite(y)&&std::fabs(x)<=1&&std::fabs(y)<=1;}
             // Offscreen is not an occluder. Helpers may need LOS behind the view.
-            auto ray=ray_visibility(point);known&=ray.known;e.bone_visible[i]=ray.known&&ray.clear;any|=e.bone_visible[i];
+            auto ray=ray_visibility(point);e.bone_visibility_known[i]=ray.known;any_known|=ray.known;e.bone_visible[i]=ray.known&&ray.clear;any|=e.bone_visible[i];
         }
-        e.occlusion_valid=known;e.visible=e.team_visible&&any;e.visibility_known=team_known&&known;
+        e.occlusion_valid=any_known;e.visible=e.team_visible&&any;e.visibility_known=team_known&&any_known;
         if(e.visible&&on_screen){auto& times=visible_times[e.handle];if(!times.first||f.time-times.second>250)times.first=f.time;times.second=f.time;e.visible_since=times.first;}else visible_times.erase(e.handle);
     }};visibility(f.enemies,false,false);visibility(f.friendlies,true,false);
     {profile_scope::ActiveScope hero_settings(f.local);if(native_target::supports_entity(EClass::NPC)&&(cfg.B("aim.target_minions")||cfg.B("aim.target_neutrals")))visibility(f.npcs,false,true);}
     if(!visibility_cache::same(collision::revision(),collision_revision)){
-        visibility_rays.clear();auto invalidate=[&](std::vector<Entity>& values){for(auto& e:values){e.visible=e.visibility_known=e.occlusion_valid=false;e.bone_visible.fill(false);visible_times.erase(e.handle);}};
+        auto invalidate=[&](std::vector<Entity>& values){for(auto& e:values){e.visible=e.visibility_known=e.occlusion_valid=false;e.bone_visible.fill(false);e.bone_visibility_known.fill(false);visible_times.erase(e.handle);}};
         invalidate(f.enemies);invalidate(f.friendlies);invalidate(f.npcs);
     }
     std::lock_guard<std::mutex> lock(snap_mtx);
@@ -138,7 +132,7 @@ void entity_thread_start(){
     if(reader_running.exchange(true))return;
     world_units::set_scale(0);snap.action_valid=false;snap.read_hz=0;snap.read_hz_exact=0;snap.poll_ms=0;snap.publish_ms=0;snap.scan_ms=0;snap.discovery_completed_ms=0;snap.discovery_interval_ms=0;snap.discovery_pages_read=0;snap.discovery_pages_unavailable=0;snap.discovery_accepted=0;snap.discovery_pawns=0;snap.discovery_controllers=0;
     if(reader_thread.joinable())reader_thread.join();snap.backend_managed=true;
-    plat_log("Reader settings: limit=%d Hz, discovery=%d ms, world=%d ms",cfg.I("reader.max_hz"),cfg.I("reader.discovery_ms"),cfg.I("reader.world_ms"));    plat_stage("reader","starting");reader_thread=std::thread([]{u64 rate_start=now_ms();unsigned rate_count=0;u64 previous_start=0,cadence_sum=0,cadence_count=0,cadence_min=UINT64_MAX,cadence_max=0;std::string previous_gate_report;u64 gate_reported_at=0;std::array<u64,5> stage_sums{},stage_maxima{};u64 completed_cycles=0;while(reader_running){const auto iteration_started=std::chrono::steady_clock::now();auto start=now_ms();if(previous_start){const auto period=start-previous_start;snap.iteration_ms=period;cadence_sum+=period;++cadence_count;cadence_min=std::min(cadence_min,period);cadence_max=std::max(cadence_max,period);}previous_start=start;live_backend::Frame frame;
+    plat_log("Reader settings: limit=%d Hz, discovery=%d ms, world=%d ms",cfg.I("reader.max_hz"),cfg.I("reader.discovery_ms"),cfg.I("reader.world_ms"));    plat_stage("reader","starting");reader_thread=std::thread([]{u64 rate_start=now_ms();unsigned rate_count=0;u64 previous_start=0,cadence_sum=0,cadence_count=0,cadence_min=UINT64_MAX,cadence_max=0;std::string previous_gate_report;u64 gate_reported_at=0;std::array<u64,5> stage_sums{},stage_maxima{};u64 completed_cycles=0;while(reader_running){Settings::ReadScope reader_settings(cfg);const auto iteration_started=std::chrono::steady_clock::now();auto start=now_ms();if(previous_start){const auto period=start-previous_start;snap.iteration_ms=period;cadence_sum+=period;++cadence_count;cadence_min=std::min(cadence_min,period);cadence_max=std::max(cadence_max,period);}previous_start=start;live_backend::Frame frame;
         if(rescan_requested.exchange(false)){plat_stage("reader","rescanning identities",false);live_backend::live.recache();}
         if(refresh_requested.exchange(false)){plat_stage("reader","refreshing memory caches",false);bool refreshed=mem.refresh_caches();live_backend::live.recache();std::lock_guard<std::mutex> lock(refresh_mutex);refresh_message=refreshed?"Memory caches refreshed; rebuilding entity data":"Memory refresh unavailable; rebuilding entity data";}
         plat_stage("reader","validating layout",false);static u64 checked=0;if(off.resolved&&now_ms()-checked>1000){checked=now_ms();if(!off.validate())off.invalidate("Live layout validation lost; waiting for game reattachment");}

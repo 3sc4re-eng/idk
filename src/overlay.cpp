@@ -59,6 +59,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <map>
 extern char g_ace_user[64];
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
@@ -199,6 +200,7 @@ static std::string menu_search_lower(std::string value){std::transform(value.beg
 static constexpr int menu_search_name_rank(std::string_view name_terms,std::string_view query){return name_terms.find(query)==std::string_view::npos?1:0;}
 static_assert(menu_search_name_rank("menu font size","font")<menu_search_name_rank("custom style","font")&&menu_search_name_rank("esp font size","font")<menu_search_name_rank("text size(px)","font"),"Direct font setting names must precede alias-only matches.");
 static std::vector<MenuSearchDestination> menu_setting_destinations(){
+    Settings::WriteScope settings_edit(cfg);
     std::vector<MenuSearchDestination> result;
     auto add=[&](int tab,int page,const char* section,const char* section_aliases,std::initializer_list<const char*> paths){
         for(auto path:paths){
@@ -222,7 +224,7 @@ static std::vector<MenuSearchDestination> menu_setting_destinations(){
         }
     };
     add(0,0,"Aimbot / General","smooth smoothing curve FOV prediction dead zone",{"aim.enabled","aim.key","aim.mode","aim.fov","aim.fov_circle","aim.prediction","aim.smooth","aim.curve","aim.deadzone_fov","aim.deadzone_draw"});
-    add(0,0,"Aimbot / Targeting","target switch reaction delay",{"target.team_check","aim.target_players","aim.priority","aim.hard_lock","aim.max_dist","aim.skip_fast","aim.max_speed","aim.start_delay_ms","aim.act_delay_min","aim.act_delay_max","aim.retarget_ms","aim.visible_ms"});
+    add(0,0,"Aimbot / Targeting","target switch reaction delay",{"target.team_check","aim.target_players","aim.priority","aim.hard_lock","aim.max_dist","aim.visible_check","aim.skip_fast","aim.max_speed","aim.start_delay_ms","aim.act_delay_min","aim.act_delay_max","aim.retarget_ms","aim.visible_ms"});
     for(int region=0;region<7;++region)if(native_target::supports_region(region)){
         const auto path=aim_model::key(region);if(const auto* setting=cfg.find(path.c_str())){
             const auto label=setting->name+" / Aimbot / Bone selection";
@@ -231,12 +233,12 @@ static std::vector<MenuSearchDestination> menu_setting_destinations(){
     }
     add(1,0,"Triggerbot / General","trigger delay time between shots",{"trigger.enabled","trigger.key","trigger.activation","trigger.prediction","trigger.first_shot_delay_min","trigger.first_shot_delay_max","trigger.followup_delay_min","trigger.followup_delay_max","trigger.hitchance_min","trigger.max_dist","trigger.skip_fast","trigger.max_speed"});
     add(1,0,"Triggerbot / Magnet","magnet smoothing FOV curve",{"trigger.magnet","trigger.magnet_prediction","trigger.magnet_fov","trigger.magnet_visible_ms","trigger.magnet_smooth","trigger.magnet_curve","trigger.magnet_strength","trigger.magnet_deadzone_fov","trigger.magnet_max_dist"});
-    add(2,0,"Visuals / Gameplay master","global gameplay visuals ESP",{"visuals.enabled"});
+    add(2,0,"Visuals / Global display","global gameplay visuals ESP world projectile group",{"visuals.enabled","world.enabled"});
     for(int page=0;page<2;++page)add(2,page,page?"Visuals / Teammates":"Visuals / Enemies","player ESP",{"esp.enabled","esp.box","esp.health","esp.tracers","esp.head_circle","esp.name","esp.souls","esp.distance","esp.ultimate","esp.abilities","esp.draw_distance"});
     add(2,2,"Visuals / Minions","neutral bosses troopers",{"minions.enabled","minions.enemy","minions.friendly","minions.troopers","minions.neutral","minions.bosses","minions.box","minions.health","minions.name","minions.distance","minions.distance_limit","minions.color_enemy","minions.color_friendly"});
-    add(8,0,"World / Categories","world objects",{"visuals.enabled","world.enabled","cls.world"});
+    add(8,0,"World / Categories","world objects",{"cls.world"});
     if(edit_game=="Deadlock"&&selected_world_category<world_style_catalog::count&&!cfg.B(world_style_config::keys(selected_world_category).custom.c_str()))add(8,0,"World / Shared style","shared world defaults",{"esp.color_world","esp.draw_distance"});
-    add(9,0,"Projectiles","projectiles marker name distance color size range",{"visuals.enabled","world.enabled","cls.projectiles","projectiles.marker","projectiles.name","projectiles.distance","projectiles.marker_size","projectiles.font_size","projectiles.max_dist","esp.color_proj"});
+    add(9,0,"Projectiles","projectiles marker name distance color size range",{"cls.projectiles","projectiles.marker","projectiles.name","projectiles.distance","projectiles.marker_size","projectiles.font_size","projectiles.max_dist","esp.color_proj"});
     if(edit_game=="Deadlock")for(std::size_t i=0;i<world_style_catalog::count;++i){
         const auto& category=world_style_catalog::categories[i];const auto& p=world_style_config::keys(i);
         auto add_world=[&](const std::string& path){const auto* setting=cfg.find(path.c_str());if(!setting)return;
@@ -266,6 +268,7 @@ static void menu_toolbar_next(float required){
 }
 
 static void draw_item(const char* path,const char* tip){
+    Settings::WriteScope settings_edit(cfg);
     if(action_pause_policy::is_retired_key(path))return;
     Setting* s=cfg.find(path); if(!s)return;
     ImVec2 help_start=ImGui::GetCursorScreenPos();float help_width=ImGui::GetContentRegionAvail().x;
@@ -283,7 +286,7 @@ static void draw_item(const char* path,const char* tip){
             if(ImGui::BeginPopup("Element settings")){esp_options(path+4);ImGui::EndPopup();}ImGui::PopStyleVar();
         }
         ImGui::SetCursorPos({ImGui::GetWindowContentRegionMax().x-28,y});
-        if(aceui::toggle("##toggle",s->b)){cfg.dirty=true;if(std::string(path)=="system.fps_uncapped"&&s->b)if(auto* sync=cfg.find("system.overlay_vsync"))sync->b=false;}
+        if(aceui::toggle("##toggle",s->b)){cfg.mark_dirty();if(std::string(path)=="system.fps_uncapped"&&s->b)if(auto* sync=cfg.find("system.overlay_vsync"))sync->b=false;}
         ImGui::SetCursorPos({x,std::max(bottom,y+28.f)});
     }else{
         const float available=ImGui::GetContentRegionAvail().x;
@@ -304,7 +307,7 @@ static void draw_item(const char* path,const char* tip){
                 for(int button=0;button<5;button++)if(ImGui::GetIO().MouseDown[button])listen_held_mouse|=1u<<button;
             }
             if(listening&&captured_key){
-                if(captured_key!=VK_ESCAPE){s->i=Settings::normalize_binding(s->path,captured_key);cfg.dirty=true;}
+                if(captured_key!=VK_ESCAPE){s->i=Settings::normalize_binding(s->path,captured_key);cfg.mark_dirty();}
                 shortcut_block_key=captured_key;captured_key=0;listening_key.clear();
             }
         }else{
@@ -337,7 +340,7 @@ static void draw_item(const char* path,const char* tip){
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12,12});
                 if(ImGui::BeginCombo("##value",choices[v],ImGuiComboFlags_HeightRegular)){
                     for(int i=0;i<count;i++){
-                        if(ImGui::Selectable(choices[i],i==v)){s->i=i;cfg.dirty=true;}
+                        if(ImGui::Selectable(choices[i],i==v)){s->i=i;cfg.mark_dirty();}
                         if(i==v)ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
@@ -346,14 +349,14 @@ static void draw_item(const char* path,const char* tip){
             }else if(s->type==SType::Float){
                 const char* fmt=s->fstep<1?"%.1f":"%.0f";
                 float maximum=s->fmax;const bool zone=p=="aim.deadzone_fov"||p=="trigger.magnet_deadzone_fov";
-                if(zone){maximum=std::max(s->fmin,std::min(s->fmax,cfg.F(p=="aim.deadzone_fov"?"aim.fov":"trigger.magnet_fov")));float value=clampf(s->f,s->fmin,maximum);if(value!=s->f){s->f=value;cfg.dirty=true;}}
-                if(ImGui::SliderFloat("##value",&s->f,s->fmin,maximum,fmt,zone?ImGuiSliderFlags_AlwaysClamp:ImGuiSliderFlags_None)){if(zone)s->f=clampf(s->f,s->fmin,maximum);cfg.dirty=true;}
+                if(zone){maximum=std::max(s->fmin,std::min(s->fmax,cfg.F(p=="aim.deadzone_fov"?"aim.fov":"trigger.magnet_fov")));float value=clampf(s->f,s->fmin,maximum);if(value!=s->f){s->f=value;cfg.mark_dirty();}}
+                if(ImGui::SliderFloat("##value",&s->f,s->fmin,maximum,fmt,zone?ImGuiSliderFlags_AlwaysClamp:ImGuiSliderFlags_None)){if(zone)s->f=clampf(s->f,s->fmin,maximum);cfg.mark_dirty();}
             }else if(s->type==SType::Int){
-                if(ImGui::SliderInt("##value",&s->i,(int)s->fmin,(int)s->fmax))cfg.dirty=true;
+                if(ImGui::SliderInt("##value",&s->i,(int)s->fmin,(int)s->fmax))cfg.mark_dirty();
             }else if(s->type==SType::Color){
                 float v[]={s->c.r,s->c.g,s->c.b,s->c.a};
                 if(ImGui::ColorEdit4("##value",v,ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_AlphaBar)){
-                    s->c={v[0],v[1],v[2],v[3]};cfg.dirty=true;
+                    s->c={v[0],v[1],v[2],v[3]};cfg.mark_dirty();
                 }
             }
         }
@@ -397,16 +400,16 @@ static float menu_tab_row_width(const char* const* labels,int count){
 }
 static bool menu_tabs(const char* id,const char* const* labels,int count,int& selected,float width){
     bool changed=false;ImGui::PushID(id);const auto origin=ImGui::GetCursorScreenPos();
-    const auto plan=menu_layout::tabs(menu_tab_widths(labels,count),width);auto* draw=ImGui::GetWindowDrawList();
+    const auto plan=menu_layout::tabs(menu_tab_widths(labels,count),width,ImGui::GetTextLineHeight()+12.f);auto* draw=ImGui::GetWindowDrawList();
     for(int i=0;i<count;++i){const auto& cell=plan.cells[static_cast<std::size_t>(i)];const ImVec2 at{origin.x+cell.x,origin.y+cell.y};
         ImGui::SetCursorScreenPos(at);ImGui::PushID(i);
-        if(ImGui::InvisibleButton("##tab",{cell.width,menu_layout::tab_height})){selected=i;changed=true;}
+        if(ImGui::InvisibleButton("##tab",{cell.width,plan.row_height})){selected=i;changed=true;}
         const bool active=selected==i;const float inset=std::min(12.f,cell.width*.25f);
-        draw->AddRectFilled({at.x+2,at.y+1},{at.x+cell.width-2,at.y+menu_layout::tab_height-2},ImGui::GetColorU32(active?ImGuiCol_HeaderActive:ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_ChildBg),5);
-        if(active)draw->AddRectFilled({at.x+inset,at.y+menu_layout::tab_height-3},{at.x+cell.width-inset,at.y+menu_layout::tab_height-1},aceui::purple,1);
+        draw->AddRectFilled({at.x+2,at.y+1},{at.x+cell.width-2,at.y+plan.row_height-2},ImGui::GetColorU32(active?ImGuiCol_HeaderActive:ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_ChildBg),5);
+        if(active)draw->AddRectFilled({at.x+inset,at.y+plan.row_height-3},{at.x+cell.width-inset,at.y+plan.row_height-1},aceui::purple,1);
         const auto text=ImGui::CalcTextSize(labels[i]);const float text_inset=std::min(8.f,cell.width*.25f);
-        draw->PushClipRect({at.x+text_inset,at.y},{at.x+cell.width-text_inset,at.y+menu_layout::tab_height},true);
-        draw->AddText({at.x+std::max(text_inset,(cell.width-text.x)*.5f),at.y+(menu_layout::tab_height-text.y)*.5f},active?aceui::white:aceui::muted,labels[i]);draw->PopClipRect();
+        draw->PushClipRect({at.x+text_inset,at.y},{at.x+cell.width-text_inset,at.y+plan.row_height},true);
+        draw->AddText({at.x+std::max(text_inset,(cell.width-text.x)*.5f),at.y+(plan.row_height-text.y)*.5f},active?aceui::white:aceui::muted,labels[i]);draw->PopClipRect();
         if(text.x>cell.width-text_inset*2&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",labels[i]);ImGui::PopID();
     }
     ImGui::SetCursorScreenPos(origin);ImGui::Dummy({width,plan.height});ImGui::PopID();return changed;
@@ -417,30 +420,39 @@ static void menu_notice(const std::string& message,float width,float height){
     ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(message.c_str());ImGui::PopTextWrapPos();
     ImGui::EndChild();ImGui::PopStyleVar();
 }
-// A measured, fixed-height row owns its title and master control. It does not
-// depend on the previous frame's AutoResize child height or draw over a label.
+// The title and toggle share one measured item. A narrow heading puts the
+// toggle below its wrapped title; no child/table cursor can move the next row up.
 static void menu_page_heading(const char* label,const char* master,float width,bool compact=false){
-    ImFont* font=compact?aceui::body:aceui::heading;const float padding=compact?5.f:8.f;
-    const float label_width=std::max(1.f,width-24.f-(master?40.f:0.f));
-    ImGui::PushFont(font);const float label_height=ImGui::CalcTextSize(label,nullptr,false,label_width).y;ImGui::PopFont();
-    const float height=std::max(20.f,label_height)+padding*2.f+6.f;
-    ImGui::PushID(label);ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12,padding});ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{0,0});
-    const bool visible=ImGui::BeginChild("##page_heading",{width,height},ImGuiChildFlags_Border,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-    if(visible&&ImGui::BeginTable("##heading_columns",master?2:1,ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoPadOuterX|ImGuiTableFlags_NoSavedSettings)){
-        ImGui::TableSetupColumn("Title",ImGuiTableColumnFlags_WidthStretch);
-        if(master)ImGui::TableSetupColumn("Enabled",ImGuiTableColumnFlags_WidthFixed,28.f);
-        ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::PushFont(font);ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(label);ImGui::PopTextWrapPos();ImGui::PopFont();
-        if(master){ImGui::TableSetColumnIndex(1);if(auto* setting=cfg.find(master)){ImGui::PushID(master);if(aceui::toggle("##page_master",setting->b))cfg.dirty=true;ImGui::PopID();if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",setting->help.c_str());}}
-        ImGui::EndTable();
+    Settings::WriteScope settings_edit(cfg);
+    ImFont* font=compact?aceui::body:aceui::heading;const float padding=compact?6.f:9.f;
+    const float inner_width=menu_layout::maximum(1.f,width-24.f);
+    ImGui::PushFont(font);
+    const bool stacked=master&&inner_width<menu_layout::maximum(120.f,ImGui::GetFontSize()*8.f);
+    const float label_width=menu_layout::maximum(1.f,inner_width-(master&&!stacked?40.f:0.f));
+    const float label_height=ImGui::CalcTextSize(label,nullptr,false,label_width).y;
+    const float content_height=stacked?label_height+6.f+20.f:menu_layout::maximum(master?20.f:0.f,label_height);
+    const float height=std::ceil(content_height+padding*2.f);const auto origin=ImGui::GetCursorScreenPos();
+    auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(origin,{origin.x+width,origin.y+height},ImGui::GetColorU32(ImGuiCol_ChildBg),3.f);
+    draw->AddRect(origin,{origin.x+width,origin.y+height},ImGui::GetColorU32(ImGuiCol_Border),3.f);
+    ImGui::PushID(label);
+    ImGui::SetCursorScreenPos({origin.x+12.f,origin.y+padding+(stacked?0.f:(content_height-label_height)*.5f)});
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+label_width);ImGui::TextUnformatted(label);ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    if(master)if(auto* setting=cfg.find(master);setting&&setting->type==SType::Bool){
+        ImGui::SetCursorScreenPos({stacked?origin.x+12.f:origin.x+width-40.f,origin.y+padding+(stacked?label_height+6.f:(content_height-20.f)*.5f)});
+        ImGui::PushID(master);if(aceui::toggle("##page_master",setting->b))cfg.mark_dirty();ImGui::PopID();
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",setting->help.c_str());
     }
-    ImGui::EndChild();ImGui::PopStyleVar(2);ImGui::PopID();
+    ImGui::SetCursorScreenPos(origin);ImGui::Dummy({width,height});ImGui::PopID();
 }
 
 static void items(std::initializer_list<const char*> paths){for(auto p:paths)draw_item(p,"");}
 static void world_category_list(float /*height*/){
+    Settings::WriteScope settings_edit(cfg);
     const auto destination=world_style_config::category_from_path(menu_search_target);
     if(destination!=world_style_catalog::missing){selected_world_category=destination;world_category_filter[0]=0;}
-    control_card("##world_master","WORLD OBJECTS",[&]{items({"visuals.enabled","world.enabled","cls.world"});});
+    control_card("##world_master","WORLD OBJECTS",[&]{items({"cls.world"});});
     if(edit_game!="Deadlock")return;
     ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##world_category_search","Search categories...",world_category_filter,sizeof(world_category_filter));
     const auto query=menu_search_lower(world_category_filter);std::size_t matches=0;
@@ -449,7 +461,7 @@ static void world_category_list(float /*height*/){
         if(menu_search_lower(std::string(category.label)+" "+category.help).find(query)==std::string::npos)continue;
         ++matches;ImGui::PushID(static_cast<int>(i));const auto at=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
         const bool selected=selected_world_category==i;const auto& key=world_style_config::keys(i);auto* enabled=cfg.find(key.enabled.c_str());
-        if(ImGui::Selectable("##category",selected,0,{width,29})){selected_world_category=i;if(enabled){enabled->b=!enabled->b;cfg.dirty=true;}}
+        if(ImGui::Selectable("##category",selected,0,{width,29})){selected_world_category=i;if(enabled){enabled->b=!enabled->b;cfg.mark_dirty();}}
         const bool hovered=ImGui::IsItemHovered();auto* draw=ImGui::GetWindowDrawList();draw->AddText({at.x+8,at.y+7},aceui::white,category.label);
         const bool on=enabled&&enabled->b;draw->AddRectFilled({at.x+width-34,at.y+8},{at.x+width-6,at.y+22},on?aceui::purple:IM_COL32(66,67,72,255),7);draw->AddCircleFilled({at.x+width-(on?13.f:27.f),at.y+15},5,aceui::white,20);
         if(menu_scroll_window&&menu_search_target==key.enabled){ImGui::ScrollToRectEx(menu_scroll_window,ImRect(at,{at.x+width,at.y+29}),ImGuiScrollFlags_KeepVisibleEdgeY);menu_search_target.clear();}
@@ -506,11 +518,12 @@ static bool editing_inherited=false;
 // Imported enabled override maps may be partial. Materialize only their missing
 // scoped keys before any editable header/body can receive a fallback pointer.
 static void complete_menu_override(const std::string& scope,const std::vector<std::string>& parents={}){
+    Settings::WriteScope settings_edit(cfg);
     auto& values=cfg.overrides[scope];Settings::Scope inherited(scope,parents);
     for(const auto& entry:cfg.m){
         if(!Settings::scoped(entry.first)||values.find(entry.first)!=values.end())continue;
         const auto* inherited_value=cfg.resolved(entry.first.c_str());
-        values.emplace(entry.first,inherited_value?*inherited_value:entry.second);cfg.dirty=true;
+        values.emplace(entry.first,inherited_value?*inherited_value:entry.second);cfg.mark_dirty();
     }
 }
 static void scope_selector(float width){
@@ -541,6 +554,8 @@ static void scope_selector(float width){
         }
         ImGui::EndCombo();
     }ImGui::PopStyleVar();cfg.context.clear();editing_inherited=false;
+    // Profile loading/saving above must finish before entering the editor lock.
+    Settings::WriteScope settings_edit(cfg);
     if(edit_game!="Deadlock"){
         std::string global=edit_game+"/Global";if(cfg.overrides.find(global)==cfg.overrides.end())cfg.enable_override(global,true);complete_menu_override(global);Settings::set_context(global);
     }
@@ -611,11 +626,10 @@ static bool save_named_profile(const std::string& name,std::string* error){
     std::error_code ec;std::filesystem::create_directories("configs",ec);if(ec)return fail("Could not create or access the configs folder.");
     const bool exists=std::filesystem::exists(profile_path(name),ec);if(ec)return fail("Could not inspect the destination profile.");
     if(exists){Settings validation;validation.register_all();if(!validation.load(profile_path(name))){protected_profile_ids.insert(profile_identity(name));return fail("The destination file could not be loaded and was left unchanged. Create a new profile instead.");}}
-    const bool previous_dirty=cfg.dirty;bool saved=false;
-    try{saved=cfg.save(profile_path(name));}catch(...){cfg.dirty=previous_dirty;return fail("Could not write the profile.");}
-    if(!saved){cfg.dirty=previous_dirty;return fail("Could not write the profile.");}
-    if(!profile_lifecycle_policy::same_name(name,active_slot))cfg.dirty=previous_dirty;
-    else{last_save_failed=false;last_save_time=now_ms();}
+    const bool save_active=profile_lifecycle_policy::same_name(name,active_slot);bool saved=false;
+    try{saved=cfg.save(profile_path(name),save_active);}catch(...){return fail("Could not write the profile.");}
+    if(!saved)return fail("Could not write the profile.");
+    if(save_active){last_save_failed=false;last_save_time=now_ms();}
     return true;
 }
 static bool load_profile_now(const std::string& name){
@@ -686,13 +700,15 @@ static void switch_profile_game(const std::string& name){
 static ImU32 priority_color(int p){return p==2?IM_COL32(229,181,75,255):(p==1?IM_COL32(235,235,241,255):(p==0?IM_COL32(123,125,140,255):IM_COL32(54,55,65,140)));}
 static const char* priority_name(int p){return p==2?"High":(p==1?"Medium":(p==0?"Low":"Ignore"));}
 static void draw_pair(const char* label,const char* lo,const char* hi,float maximum){
+    Settings::WriteScope settings_edit(cfg);
     auto* a=cfg.find(lo);auto* b=cfg.find(hi);if(!a||!b)return;ImGui::PushID(lo);
     ImGui::TextUnformatted(label);ImGui::SetNextItemWidth(-1);
-    if(ImGui::SliderFloat("##minimum",&a->f,1,maximum,"Minimum: %.0f ms")){a->f=std::min(a->f,b->f);cfg.dirty=true;}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the shortest delay.",a->help.c_str());
-    ImGui::SetNextItemWidth(-1);if(ImGui::SliderFloat("##maximum",&b->f,1,maximum,"Maximum: %.0f ms")){b->f=std::max(b->f,a->f);cfg.dirty=true;}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the longest delay.",b->help.c_str());
+    if(ImGui::SliderFloat("##minimum",&a->f,1,maximum,"Minimum: %.0f ms")){a->f=std::min(a->f,b->f);cfg.mark_dirty();}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the shortest delay.",a->help.c_str());
+    ImGui::SetNextItemWidth(-1);if(ImGui::SliderFloat("##maximum",&b->f,1,maximum,"Maximum: %.0f ms")){b->f=std::max(b->f,a->f);cfg.mark_dirty();}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the longest delay.",b->help.c_str());
     ImGui::Separator();ImGui::PopID();
 }
 static void aim_points(bool heading=true){
+    Settings::WriteScope settings_edit(cfg);
     if(heading)section("TARGET POINT PRIORITY");
     const int values[]={2,1,0,-1};const char* priorities[]={"High","Medium","Low","Ignore"};
     for(int bone:{0,1,2,3,4,5,6}){
@@ -700,7 +716,7 @@ static void aim_points(bool heading=true){
         auto key=aim_model::key(bone);auto* setting=cfg.find(key.c_str());if(!setting)continue;int current=3;for(int i=0;i<4;i++)if(values[i]==setting->i)current=i;
         const auto region_start=ImGui::GetCursorScreenPos();
         ImGui::PushID(bone);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(aim_model::bone_names[bone]);ImGui::SameLine(ImGui::GetContentRegionAvail().x*.42f);ImGui::SetNextItemWidth(-1);
-        if(ImGui::BeginCombo("##priority",priorities[current])){for(int i=0;i<4;i++)if(ImGui::Selectable(priorities[i],i==current)){setting->i=values[i];cfg.dirty=true;}ImGui::EndCombo();}
+        if(ImGui::BeginCombo("##priority",priorities[current])){for(int i=0;i<4;i++)if(ImGui::Selectable(priorities[i],i==current)){setting->i=values[i];cfg.mark_dirty();}ImGui::EndCombo();}
         if(menu_scroll_window&&menu_search_target==key){ImGui::ScrollToRectEx(menu_scroll_window,ImRect(region_start,{region_start.x+ImGui::GetContentRegionAvail().x,ImGui::GetCursorScreenPos().y}),ImGuiScrollFlags_KeepVisibleEdgeY);menu_search_target.clear();}
         if(ImGui::IsItemHovered())ImGui::SetTooltip("Higher priority increases this region's selection weight; distance to your crosshair also matters. Ignore prevents selection. The choice stays stable while tracking.");ImGui::PopID();
     }
@@ -749,9 +765,10 @@ static void draw_aim_figure(){
         ImGui::SetTooltip("Both circles stay centered on your crosshair. Assistance stops while the final aim point is inside the gold ring and resumes outside. Both values use full-cone angles.%s",reference?" Diagram uses a reference projection until live camera data is available.":"");
 }
 static void draw_esp_builder(bool heading=true,float canvas_height=400){
+    Settings::WriteScope settings_edit(cfg);
     using namespace esp_elements;if(heading)section("ESP PREVIEW");
-    if(ImGui::SmallButton("Reset layout")){for(int i=0;i<Count;i++)if(auto* setting=cfg.find(position_keys[i]))setting->i=default_sides[i];cfg.dirty=true;}
-    menu_toolbar_next(ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Visible").x);if(auto* state=cfg.find("esp.preview_visible")){if(ImGui::Checkbox("Visible",&state->b))cfg.dirty=true;if(ImGui::IsItemHovered())ImGui::SetTooltip("Preview the visible-player style. This changes only the model preview.");}
+    if(ImGui::SmallButton("Reset layout")){for(int i=0;i<Count;i++)if(auto* setting=cfg.find(position_keys[i]))setting->i=default_sides[i];cfg.mark_dirty();}
+    menu_toolbar_next(ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Visible").x);if(auto* state=cfg.find("esp.preview_visible")){if(ImGui::Checkbox("Visible",&state->b))cfg.mark_dirty();if(ImGui::IsItemHovered())ImGui::SetTooltip("Preview the visible-player style. This changes only the model preview.");}
     const bool visible=cfg.B("esp.preview_visible");
     auto canvas=model_canvas(canvas_height,false);if(!canvas.frame.texture)return;auto* d=ImGui::GetWindowDrawList();auto origin=canvas.origin;
     float x1=origin.x+canvas.frame.minimum.x,x2=origin.x+canvas.frame.maximum.x,y1=origin.y+canvas.frame.minimum.y,y2=origin.y+canvas.frame.maximum.y;
@@ -766,32 +783,34 @@ static void draw_esp_builder(bool heading=true,float canvas_height=400){
     auto blocks=place(enabled,sizes,x1,y1,x2,y2);fit_preview(blocks,{origin.x+4,origin.y+4},{origin.x+canvas.width-4,origin.y+canvas.height-4});preview_element_bounds.clear();static int dragging=-1;
     for(int i=0;i<Count;i++)if(blocks[i].enabled){auto& b=blocks[i];preview_element_bounds.push_back(ImRect(b.position,{b.position.x+b.size.x,b.position.y+b.size.y}));
         bool hover=ImGui::IsMouseHoveringRect(origin,{origin.x+canvas.width,origin.y+canvas.height})&&ImGui::IsMouseHoveringRect(b.position,{b.position.x+b.size.x,b.position.y+b.size.y});if(hover&&ImGui::IsMouseClicked(0))dragging=i;
-        if(dragging==i&&ImGui::IsMouseDown(0)){auto mouse=ImGui::GetIO().MousePos;float dx=(mouse.x-(x1+x2)*.5f)/std::max(1.f,(x2-x1)*.5f),dy=(mouse.y-(y1+y2)*.5f)/std::max(1.f,(y2-y1)*.5f);int side=std::fabs(dx)>std::fabs(dy)?(dx<0?2:3):(dy<0?0:1);if(side!=b.side){cfg.find(position_keys[i])->i=side;cfg.dirty=true;}}
+        if(dragging==i&&ImGui::IsMouseDown(0)){auto mouse=ImGui::GetIO().MousePos;float dx=(mouse.x-(x1+x2)*.5f)/std::max(1.f,(x2-x1)*.5f),dy=(mouse.y-(y1+y2)*.5f)/std::max(1.f,(y2-y1)*.5f);int side=std::fabs(dx)>std::fabs(dy)?(dx<0?2:3):(dy<0?0:1);if(side!=b.side){cfg.find(position_keys[i])->i=side;cfg.mark_dirty();}}
         if(i==Abilities)draw_abilities(d,b.position,row);else esp_text(d,features[i],b.position,hover?aceui::purple:(i==Ultimate?esp_rgba(cfg.C("esp.ultimate_color")):esp_rgba(esp_element_color(features[i],visible))),text[i]);
         if(hover)d->AddRect({b.position.x-2,b.position.y-2},{b.position.x+b.size.x+2,b.position.y+b.size.y+2},aceui::purple,2);
-        ImGui::PushID(features[i]);if(hover&&ImGui::IsMouseClicked(1))ImGui::OpenPopup("Preview element");ImGui::SetNextWindowSize({360,0},ImGuiCond_Appearing);if(ImGui::BeginPopup("Preview element")){esp_options(features[i]);if(ImGui::Button("Hide this element")){cfg.find(enabled_keys[i])->b=false;cfg.dirty=true;ImGui::CloseCurrentPopup();}ImGui::EndPopup();}ImGui::PopID();
+        ImGui::PushID(features[i]);if(hover&&ImGui::IsMouseClicked(1))ImGui::OpenPopup("Preview element");ImGui::SetNextWindowSize({360,0},ImGuiCond_Appearing);if(ImGui::BeginPopup("Preview element")){esp_options(features[i]);if(ImGui::Button("Hide this element")){cfg.find(enabled_keys[i])->b=false;cfg.mark_dirty();ImGui::CloseCurrentPopup();}ImGui::EndPopup();}ImGui::PopID();
         if(hover)ImGui::SetTooltip("Drag to place %s above, below, left or right. Right-click for settings.",titles[i]);
     }
     d->PopClipRect();if(!ImGui::IsMouseDown(0))dragging=-1;ImGui::PushFont(aceui::small);ImGui::PushTextWrapPos(0);ImGui::TextDisabled("Drag any label or the ability row to place it. Right-click for settings.");ImGui::PopTextWrapPos();ImGui::PopFont();
     ImGui::TextDisabled("Hidden elements");bool first_hidden=true;
     for(int i=0;i<Count;i++)if(!enabled[i]){
         if(!first_hidden)menu_toolbar_next(ImGui::CalcTextSize(titles[i]).x+ImGui::GetStyle().FramePadding.x*2);
-        ImGui::PushID(features[i]);if(ImGui::SmallButton(titles[i])){cfg.find(enabled_keys[i])->b=true;cfg.dirty=true;}ImGui::PopID();first_hidden=false;
+        ImGui::PushID(features[i]);if(ImGui::SmallButton(titles[i])){cfg.find(enabled_keys[i])->b=true;cfg.mark_dirty();}ImGui::PopID();first_hidden=false;
     }
 
 }
 static void output_binding(const char* path){
+    Settings::WriteScope settings_edit(cfg);
     auto* setting=cfg.find(path);if(!setting)return;
-    int normalized=Settings::normalize_binding(path,setting->i);if(normalized!=setting->i){setting->i=normalized;cfg.dirty=true;}
+    int normalized=Settings::normalize_binding(path,setting->i);if(normalized!=setting->i){setting->i=normalized;cfg.mark_dirty();}
     if(inp.keyboard_ok){draw_item(path,"Choose a keyboard key, Middle Mouse, Mouse 4 or Mouse 5 bound to this action in the game. Left and Right Mouse are reserved for activation and shooting.");return;}
     ImGui::PushID(path);ImGui::TextUnformatted(setting->name.c_str());
     const int values[]={0,VK_MBUTTON,VK_XBUTTON1,VK_XBUTTON2};const char* names[]={"Not bound","Mouse 3 (middle)","Mouse 4 (side)","Mouse 5 (side)"};
     constexpr int count=sizeof(values)/sizeof(values[0]);int selected=-1;for(int i=0;i<count;i++)if(setting->i==values[i])selected=i;ImGui::SetNextItemWidth(-1);
-    if(ImGui::BeginCombo("##output",selected>=0?names[selected]:"Keyboard binding unavailable")){for(int i=0;i<count;i++)if(ImGui::Selectable(names[i],selected==i)){setting->i=values[i];cfg.dirty=true;}ImGui::EndCombo();}
+    if(ImGui::BeginCombo("##output",selected>=0?names[selected]:"Keyboard binding unavailable")){for(int i=0;i<count;i++)if(ImGui::Selectable(names[i],selected==i)){setting->i=values[i];cfg.mark_dirty();}ImGui::EndCombo();}
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Choose Middle Mouse, Mouse 4 or Mouse 5 bound to this action in the game. Keyboard delivery must be verified before keyboard bindings are available.");ImGui::PopID();
 }
 static void input_binding_help(){if(!inp.keyboard_ok)ImGui::TextWrapped("Bind this action to Middle Mouse, Mouse 4 or Mouse 5 in the game, then select it above.");}
 static void threat_list(const std::string& prefix){
+    Settings::WriteScope settings_edit(cfg);
     ImGui::PushID(prefix.c_str());static char filter[96]="";ImGui::InputTextWithHint("##threat_filter","Search heroes, abilities or items",filter,sizeof(filter));
     const bool counterspell=prefix=="defense.counterspell.";
     auto matches=[&](std::string value){std::string needle=filter;std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return (char)std::tolower(c);});std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return (char)std::tolower(c);});return needle.empty()||value.find(needle)!=std::string::npos;};
@@ -837,6 +856,7 @@ static void hero_defense(unsigned id){
     section("SELECT THREATS");threat_list(p);
 }
 static void cleanse_effects(){
+    Settings::WriteScope settings_edit(cfg);
     section("EFFECTS TO CLEANSE");static char filter[80]="";static std::set<u32> observed;
     {std::lock_guard<std::mutex> lock(snap_mtx);for(auto token:snap.local.removable_debuffs)observed.insert(token);}
     ImGui::InputTextWithHint("##cleanse_filter","Search effect or source",filter,sizeof(filter));std::string needle=filter;
@@ -844,7 +864,7 @@ static void cleanse_effects(){
     for(const auto& entry:ability_data::entries){auto* proof=cleanse_data::find(entry.token);if(!entry.enemy||entry.passive||(!proof&&!observed.count(entry.token)))continue;
         std::string label=std::string(entry.title)+(proof?std::string(" (")+proof->effects+")":"");std::string lower=label;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return (char)std::tolower(c);});if(!needle.empty()&&lower.find(needle)==std::string::npos)continue;
         std::string key="cleanse.watch."+std::to_string(entry.token);auto* setting=cfg.find(key.c_str());if(!setting)continue;
-        ImGui::PushID((int)entry.token);ImGui::BeginGroup();if(ImGui::Checkbox("##selected",&setting->b))cfg.dirty=true;ImGui::SameLine(0,7);ImGui::TextWrapped("%s",label.c_str());ImGui::EndGroup();if(ImGui::IsItemHovered())ImGui::SetTooltip("Use a configured cleanse only while this source has an active removable enemy effect on you.");ImGui::PopID();
+        ImGui::PushID((int)entry.token);ImGui::BeginGroup();if(ImGui::Checkbox("##selected",&setting->b))cfg.mark_dirty();ImGui::SameLine(0,7);ImGui::TextWrapped("%s",label.c_str());ImGui::EndGroup();if(ImGui::IsItemHovered())ImGui::SetTooltip("Use a configured cleanse only while this source has an active removable enemy effect on you.");ImGui::PopID();
     }
 }
 static void automatic_usage(const autouse::Rule& rule){
@@ -877,13 +897,19 @@ static void debug_overlay(u64 width,u64 height){
     if(cfg.B("dbg.ballistics")){Entity local;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;}const auto& shot=local.current_shot;char text[240];if(shot.valid)snprintf(text,sizeof(text),"%s | %.1f m/s | estimated flight %.0f ms",shot.name.c_str(),world_units::metres(shot.speed),aim::flight_seconds*1000);else snprintf(text,sizeof(text),"Projectile lead: %s",shot.reason.c_str());ImGui::GetForegroundDrawList()->AddText({20,220},aceui::white,text);}
 
     if(!cfg.B("dbg.targets")&&!cfg.B("dbg.rays")&&!cfg.B("dbg.timing"))return;
-    Entity local;std::vector<Entity> enemies;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;enemies=snap.enemies;}
+    Entity local;Vec3 camera;bool camera_valid=false;std::vector<Entity> enemies;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;camera=snap.camera;camera_valid=snap.camera_valid;enemies=snap.enemies;}
     auto* draw=ImGui::GetForegroundDrawList();
     for(auto& enemy:enemies){auto point=world_to_screen(enemy.pos+Vec3{0,0,90},width,height);if(!aim_model::on_screen(point,(float)width,(float)height))continue;
         const char* reason=(snap.backend_managed&&!enemy.alive_valid)?"Life/current HP unknown":!enemy.alive?"Dead":enemy.bullet_invuln?"Bullet immune / Metal Skin":enemy.invuln?"Invulnerable":!enemy.occlusion_valid?"Occlusion unknown":!enemy.visible?"No visible shot":local.disarmed?"Local disarmed":local.reloading?"Reloading":"";
         if(cfg.B("dbg.targets")&&*reason)draw->AddText({point.x,point.y},IM_COL32(255,160,80,255),reason);
-        if(cfg.B("dbg.rays")){Vec3 from=local.pos+Vec3{0,0,45},to=enemy.pos+Vec3{0,0,55};auto ray=collision::trace(from,to,collision::Bullet);auto a=world_to_screen(from,width,height),b=world_to_screen(ray.known?ray.hit:to,width,height);
-            if(aim_model::on_screen(a,(float)width,(float)height)&&aim_model::on_screen(b,(float)width,(float)height)){auto color=!ray.known?IM_COL32(255,180,80,255):ray.clear?IM_COL32(90,220,150,255):IM_COL32(250,80,90,255);draw->AddLine({a.x,a.y},{b.x,b.y},color,1.5f);draw->AddCircleFilled({b.x,b.y},3,color);}
+        if(cfg.B("dbg.rays")&&camera_valid){
+            for(int region=0;region<2;++region){Vec3 to;if(!native_target::point(enemy,region,to,snap.native_binding_epoch.load(),mem.attachment_epoch(),now_ms()))continue;
+                const auto projected=world_to_screen(to,width,height);if(!aim_model::on_screen(projected,(float)width,(float)height))continue;
+                auto ray=collision::trace_any(camera,to,collision::Vision|collision::Bullet);
+                auto end=world_to_screen(ray.known?ray.hit:to,width,height);if(!aim_model::on_screen(end,(float)width,(float)height))continue;
+                const auto color=!ray.known?IM_COL32(255,180,80,255):ray.clear?IM_COL32(90,220,150,255):IM_COL32(250,80,90,255);
+                draw->AddLine({width*.5f,height*.5f},{end.x,end.y},color,1.5f);draw->AddCircleFilled({end.x,end.y},3,color);
+            }
         }
     }
     if(cfg.B("dbg.timing")){char text[180];snprintf(text,sizeof(text),"Reader %d Hz | poll %llu ms | publish %llu ms | last scan %llu ms | age %llu ms",snap.read_hz.load(),(unsigned long long)snap.poll_ms.load(),(unsigned long long)snap.publish_ms.load(),(unsigned long long)snap.scan_ms.load(),(unsigned long long)(now_ms()-snap.last_read_ms.load()));draw->AddText({18,42},IM_COL32(235,235,245,255),text);}
@@ -954,8 +980,17 @@ static bool make_overlay_swap_chain(HWND hwnd,int& W,int& H,IDXGISwapChain** swa
 }
 static std::atomic<bool> dma_thread_run{false},dma_restart_requested{false};
 static void dma_worker(){
+    auto failed=[](const char* detail){
+        dma_thread_run=false;
+        {std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=std::string("Attachment worker stopped: ")+detail;}
+        plat_log("Attachment worker stopped: %s",detail);
+    };
+    try{
+    if(!dma_thread_run)return;
+    for(const char* name:{"vmm.dll","leechcore.dll","ftd3xx.dll"})plat_log("Runtime file %s: %s",name,GetFileAttributesA(name)==INVALID_FILE_ATTRIBUTES?"MISSING":"present");
+    plat_stage("attach","waiting for game");
     // A slow or missing input device must not delay an already validated reader.
-    if(off.resolved)entity_thread_start(); // Loader preflight already bound this layout.
+    if(off.resolved)entity_thread_start(); // An existing validated attachment may resume; menu launch alone never sets this flag.
     if(cfg.B("input.autoconnect")&&cfg.I("input.mode")!=2&&!inp.device_ok)hw::init();
     u64 last_try=0;
     while(dma_thread_run){
@@ -969,15 +1004,17 @@ static void dma_worker(){
                     if(mem.init_vmm())plat_log("Overlay: DMA card connected");
                     else{std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=mem.status.text;}
                 }
-                if(mem.ready()){
+                if(mem.ready()&&dma_thread_run){
                     consume_attach_recovery();bool matched=off.resolve(games::selected);auto status=off.status_text();
                     {std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=status;}
-                    if(matched){toast("Game layout validated. Waiting for live data.",{0.3f,1,0.5f,1});entity_thread_start();}
+                    if(matched&&dma_thread_run){toast("Game layout validated. Waiting for live data.",{0.3f,1,0.5f,1});entity_thread_start();}
                 }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    }catch(const std::exception& error){failed(error.what());}
+    catch(...){failed("unknown exception; see Log");}
 }
 
 int run(bool preview){
@@ -988,7 +1025,10 @@ int run(bool preview){
     FramePacer frame_pacer;
     preview_session=preview;edit_game=games::selected->name;active_slot=selected_profile="default";
     profile_game_states.clear();Settings::context.clear();Settings::visual_team=false;
-    cfg=Settings{};cfg.register_all();protected_profile_ids.clear();pending_profile_name.clear();profile_message.clear();load_startup_profile();if(!preview)snap.backend_managed=true;
+    cfg=Settings{};cfg.register_all();protected_profile_ids.clear();pending_profile_name.clear();profile_message.clear();load_startup_profile();
+    // ACE_LAUNCHER_WAIT_MENU_V1: publish waiting text before the worker exists;
+    // keep all attachment/readiness flags under their existing backend owners.
+    if(!preview){snap.backend_managed=true;if(!off.resolved){std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status="Waiting for game; background attachment has not completed";}}
     WNDCLASSEXW wc{}; wc.cbSize=sizeof(WNDCLASSEXW);
     wc.style=CS_HREDRAW|CS_VREDRAW;
     wc.lpfnWndProc=WndProc;
@@ -1041,7 +1081,13 @@ int run(bool preview){
     plat_log("Overlay started. Menu open by default. Menu key: Left Ctrl. Panic: End.");
     dma_thread_run=!preview;
     std::thread dma_w;
-    if(!preview)dma_w=std::thread(dma_worker);
+    if(!preview){
+        try{dma_w=std::thread(dma_worker);}
+        catch(const std::exception& error){
+            dma_thread_run=false;{std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status="Attachment worker could not start; close ACE and retry";}
+            plat_log("Attachment worker could not start: %s",error.what());
+        }
+    }
     while(!done){
         auto frame_begin=std::chrono::steady_clock::now();
         MSG msg;
@@ -1071,14 +1117,14 @@ int run(bool preview){
         bool refresh_key=game_key_down(cfg.I("system.recache_key"))||(GetAsyncKeyState(cfg.I("system.recache_key"))&0x8000);static bool refresh_previous=false;if(!preview&&refresh_key&&!refresh_previous&&listening_key.empty())request_recache();refresh_previous=refresh_key;
         plat_stage("renderer","updating frame",false);
         // Normalize loaded/imported display combinations before any autosave.
-        if(cfg.B("system.fps_uncapped"))if(auto* sync=cfg.find("system.overlay_vsync"))if(sync->b){sync->b=false;cfg.dirty=true;}
+        {Settings::WriteScope settings_edit(cfg);if(cfg.B("system.fps_uncapped"))if(auto* sync=cfg.find("system.overlay_vsync"))if(sync->b){sync->b=false;cfg.mark_dirty();}}
         hw::update_diagnostics();snap.overlay_menu=menu_open;
         if(!preview){
         aim::tick((u64)W,(u64)H);
         trig::tick((u64)W,(u64)H);
         helpers::tick((u64)W,(u64)H);
         autosave_tick();
-        static u64 last_action_report=0;if(now_ms()-last_action_report>5000){last_action_report=now_ms();char target_state[512];{std::lock_guard<std::mutex> lock(snap_mtx);unsigned alive=0,visible=0,occlusion=0,immune=0;for(auto& e:snap.enemies){alive+=e.alive;visible+=e.visible;occlusion+=e.occlusion_valid;immune+=e.bullet_invuln||e.invuln;}snprintf(target_state,sizeof(target_state),"Target state: total=%u alive=%u visible=%u occlusion_known=%u immune=%u | local valid=%d alive=%d reloading=%d disarmed=%d weapon_valid=%d",(unsigned)snap.enemies.size(),alive,visible,occlusion,immune,snap.local.valid,snap.local.alive,snap.local.reloading,snap.local.disarmed,snap.local.weapon_valid);}plat_log("%s",target_state);plat_log("DMA state: %s",mem.diagnostics().c_str());plat_log("Render state: %.1f FPS, cap=%d (0=uncapped), VSync=%s, mode=%d",ImGui::GetIO().Framerate,cfg.B("system.fps_uncapped")?0:cfg.I("system.max_fps"),(!cfg.B("system.fps_uncapped")&&cfg.B("system.overlay_vsync"))?"on":"off",cfg.I("system.overlay_mode"));plat_log("Render timing: work %.2f ms, Present %.2f ms, limiter %.2f ms, Present HRESULT 0x%08X",render_timings.work_ms,render_timings.present_ms,render_timings.wait_ms,(unsigned)render_timings.present_result);plat_log("Action state: aim=%s target_index=%d trigger=%s output_gate=%s | %s | prediction=%s",aim::active?"active":"idle",aim::target_idx,trig::is_armed()?"armed":"idle",game_output_reason().c_str(),hw::diagnostic_summary().c_str(),aim::prediction_status.c_str());}
+        static u64 last_action_report=0;if(now_ms()-last_action_report>5000){last_action_report=now_ms();char target_state[512];{std::lock_guard<std::mutex> lock(snap_mtx);unsigned alive=0,visible=0,occlusion=0,immune=0;for(auto& e:snap.enemies){alive+=e.alive;visible+=e.visible;occlusion+=e.occlusion_valid;immune+=e.bullet_invuln||e.invuln;}snprintf(target_state,sizeof(target_state),"Target state: total=%u alive=%u visible=%u occlusion_known=%u immune=%u | local valid=%d alive=%d reloading=%d disarmed=%d weapon_valid=%d",(unsigned)snap.enemies.size(),alive,visible,occlusion,immune,snap.local.valid,snap.local.alive,snap.local.reloading,snap.local.disarmed,snap.local.weapon_valid);}plat_log("%s",target_state);plat_log("DMA state: %s",mem.diagnostics().c_str());plat_log("Render state: %.1f FPS, cap=%d (0=uncapped), VSync=%s, mode=%d",ImGui::GetIO().Framerate,cfg.B("system.fps_uncapped")?0:cfg.I("system.max_fps"),(!cfg.B("system.fps_uncapped")&&cfg.B("system.overlay_vsync"))?"on":"off",cfg.I("system.overlay_mode"));plat_log("Render timing: work %.2f ms, Present %.2f ms, limiter %.2f ms, Present HRESULT 0x%08X",render_timings.work_ms,render_timings.present_ms,render_timings.wait_ms,(unsigned)render_timings.present_result);plat_log("Action state: aim=%s target_index=%d trigger=%s output_gate=%s | %s | prediction=%s aim_reason=%s",aim::active?"active":"idle",aim::target_idx,trig::is_armed()?"armed":"idle",game_output_reason().c_str(),hw::diagnostic_summary().c_str(),aim::prediction_status.c_str(),aim::wait_reason.c_str());}
         }
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -1156,7 +1202,24 @@ int run(bool preview){
             const float search_width=stacked_header?cw:std::min(236.f,cw*.40f);
             const float title_width=stacked_header?cw:cw-search_width-16.f;
             ImGui::SetCursorPos({content_x,12});ImGui::PushFont(aceui::heading);ImGui::PushTextWrapPos(content_x+title_width);ImGui::TextUnformatted(names[tab]);ImGui::PopTextWrapPos();ImGui::PopFont();
-            ImGui::PushFont(aceui::small);ImGui::TextDisabled("%s",edit_game.c_str());ImGui::PopFont();
+            // Reuse the existing subtitle row; clip long status at large font
+            // sizes without changing title/search/tab vertical geometry.
+            ImGui::PushFont(aceui::small);std::string subtitle=edit_game;
+            if(!preview){
+                const auto phase=off.phase();const bool attached=off.resolved.load();
+                subtitle=attached?(snap.frame_valid.load()?"Live data ready":"Waiting for live data"):
+                    !dma_thread_run.load()?"Attachment worker unavailable":phase==AttachPhase::UpdateRequired?"Update required":
+                    phase==AttachPhase::FindingModules||phase==AttachPhase::Validating?"Checking game":"Waiting for game";
+            }
+            const auto subtitle_pos=ImGui::GetCursorScreenPos();const float subtitle_height=ImGui::GetTextLineHeight();
+            ImGui::InvisibleButton("##game_attachment_state",{title_width,subtitle_height});
+            d->PushClipRect(subtitle_pos,{subtitle_pos.x+title_width,subtitle_pos.y+subtitle_height},true);
+            aceui::text(d,aceui::small,subtitle_pos,ImGui::GetColorU32(ImGuiCol_TextDisabled),subtitle.c_str());d->PopClipRect();
+            if(ImGui::IsItemHovered()){
+                if(preview)ImGui::SetTooltip("%s",edit_game.c_str());
+                else ImGui::SetTooltip("%s | %s\n%s\n%s",edit_game.c_str(),subtitle.c_str(),off.status_text().c_str(),backend_status().c_str());
+            }
+            ImGui::PopFont();
             const float title_bottom=ImGui::GetCursorPosY(),search_y=stacked_header?title_bottom+6.f:18.f;
             const float tabs_y=std::max(title_bottom,search_y+ImGui::GetFrameHeight())+8.f,tabs_width=cw;
             ImGui::SetCursorPos({stacked_header?content_x:mw-16-search_width,search_y});ImGui::SetNextItemWidth(search_width);
@@ -1199,12 +1262,6 @@ int run(bool preview){
             else ImGui::Dummy({cw,0});
             float body_y=ImGui::GetCursorPosY()+12.f;
             ImGui::SetCursorPos({rail+16,body_y});
-            if(tab==2){
-                Settings::visual_team=false;menu_scroll_window=nullptr;
-                menu_page_heading("Gameplay ESP","visuals.enabled",cw,true);
-                body_y=ImGui::GetCursorPosY()+3;
-                ImGui::SetCursorPos({rail+16,body_y});
-            }
             const char* page_title=tab==2?(visual_page==0?"Enemy ESP":visual_page==1?"Teammate ESP":"Minion ESP"):names[tab];
             const char* page_master=tab==0?"aim.enabled":tab==1?"trigger.enabled":tab==2?(visual_page<2?"esp.enabled":"minions.enabled"):nullptr;
             Settings::visual_team=tab==2&&visual_page==1;
@@ -1226,12 +1283,15 @@ int run(bool preview){
 
             if(tab==0){
                 control_card("##aim_settings","ACTIVATION",[&]{items({"aim.enabled","aim.key","aim.mode","aim.fov","aim.fov_circle"});});
-                control_card("##aim_targeting","TARGETING",[&]{items({"aim.target_players","aim.max_dist","aim.priority","aim.hard_lock","aim.skip_fast"});if(cfg.B("aim.skip_fast"))items({"aim.max_speed"});});
+                control_card("##aim_targeting","TARGETING",[&]{items({"aim.target_players","aim.max_dist","aim.priority","aim.hard_lock","aim.visible_check","aim.skip_fast"});if(cfg.B("aim.skip_fast"))items({"aim.max_speed"});});
                 control_card("##aim_global_filter","FILTERS",[&]{draw_item("target.team_check","Global filter for every hero in the active profile. Hero overrides do not change this filter.");});
             }else if(tab==1){
                 control_card("##trigger_settings","ACTIVATION",[&]{items({"trigger.enabled","trigger.key","trigger.activation","trigger.prediction","trigger.hitchance_min","trigger.max_dist","trigger.skip_fast"});if(cfg.B("trigger.skip_fast"))items({"trigger.max_speed"});});
                 control_card("##trigger_timing","FIRING TIMING",[&]{draw_pair("Trigger delay","trigger.first_shot_delay_min","trigger.first_shot_delay_max",600);draw_pair("Time between shots","trigger.followup_delay_min","trigger.followup_delay_max",400);});
             }else if(tab==2){
+                // Shared display prerequisites appear once, below navigation,
+                // in the scrolling column. Category pages edit only cls.*.
+                control_card("##visual_global_display","GLOBAL DISPLAY",[&]{items({"visuals.enabled","world.enabled"});});
                 if(visual_page<2){
                     control_card("##player_rendering","RENDERING",[&]{items({"esp.box","esp.health","esp.tracers","esp.head_circle"});});
                     control_card("##player_information","PLAYER INFORMATION",[&]{items({"esp.name","esp.souls","esp.distance"});});
@@ -1243,7 +1303,7 @@ int run(bool preview){
                 }
             }else if(tab==8){world_category_list(ch);
             }else if(tab==9){
-                control_card("##projectile_rendering","PROJECTILE RENDERING",[&]{items({"visuals.enabled","world.enabled","cls.projectiles"});});
+                control_card("##projectile_rendering","PROJECTILE RENDERING",[&]{items({"cls.projectiles"});});
                 control_card("##projectile_elements","DISPLAY ELEMENTS",[&]{items({"projectiles.marker","projectiles.name","projectiles.distance"});});
             }else if(tab==4){
                 section("WEB RADAR");ImGui::BeginDisabled(radar::running());draw_item("radar.listen","");draw_item("radar.port","Stop the radar before changing access or port.");ImGui::EndDisabled();
@@ -1296,7 +1356,7 @@ int run(bool preview){
                     draw_item("reader.world_ms","");ImGui::TextDisabled("Publish: %llu ms",(unsigned long long)snap.publish_ms.load());
                 }else{
                     section("MENU APPEARANCE");items({"ui.accent","ui.background","ui.panel","ui.text","ui.splash"});
-                    if(ImGui::Button("Reset menu theme",{-1,30})){cfg.find("ui.accent")->c={.55f,.48f,.98f,1};cfg.find("ui.background")->c={.055f,.058f,.075f,1};cfg.find("ui.panel")->c={.078f,.083f,.105f,1};cfg.find("ui.text")->c={.92f,.92f,.96f,1};cfg.dirty=true;}
+                    if(ImGui::Button("Reset menu theme",{-1,30})){Settings::WriteScope settings_edit(cfg);cfg.find("ui.accent")->c={.55f,.48f,.98f,1};cfg.find("ui.background")->c={.055f,.058f,.075f,1};cfg.find("ui.panel")->c={.078f,.083f,.105f,1};cfg.find("ui.text")->c={.92f,.92f,.96f,1};cfg.mark_dirty();}
                 }
             }else{section("LIVE LOG");if(ImGui::Button("Show console")){SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);plat_show_console();}ImGui::SameLine();if(ImGui::Button("Copy log")){std::string text;for(auto& line:plat_recent_logs())text+=line+"\n";clipboard_set(text);}ImGui::BeginChild("##live_log",{0,0},true,ImGuiWindowFlags_HorizontalScrollbar);for(auto& line:plat_recent_logs())ImGui::TextUnformatted(line.c_str());if(ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-30)ImGui::SetScrollHereY(1.f);ImGui::EndChild();
             }

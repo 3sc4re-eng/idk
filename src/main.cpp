@@ -33,8 +33,9 @@ int main(int argc,char** argv){
     plat_log("Loader starting, ACE entity-reader recovery 2026-11-01 (DMA-only)");plat_log("%s | Build ID %s | UTC %s",build_info::display,build_info::id,build_info::utc);plat_stage("startup","loader");
     _mkdir("configs");
     cfg.register_all();
-    if(!loaderui::run(false,request==launch_request::Mode::DeadlockMenu)){hw::disconnect();plat_log("Loader window closed.");return 0;}
-    plat_stage("startup","overlay");plat_log("Overlay starting - loader validated the game layout; reader starts in background.");
+    if(!loaderui::run(false,request==launch_request::Mode::DeadlockMenu)){hw::disconnect();plat_log("Loader window closed.");plat_shutdown_diagnostics();return 0;}
+    // ACE_LAUNCHER_WAIT_MENU_V1: menu selection does not assert attachment.
+    plat_stage("startup","overlay");plat_log("Menu opening for %s; waiting for game. Backend attachment and validation run in the background.",games::selected->name);
     int rc=overlay::run();
     plat_log("Overlay closed by user. Saving config and exiting.");
     // The overlay saves the active named profile before returning.

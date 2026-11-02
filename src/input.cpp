@@ -265,6 +265,7 @@ std::string test_click(){
     if(cfg.I("input.latency_ms"))Sleep((DWORD)cfg.I("input.latency_ms"));bool pressed=wr("km.left(1)\r\n");Sleep(35);bool released=wr("km.left(0)\r\n");if(!released)return "Mouse release could not be sent";return pressed?"Sent one left click to the game PC":"Could not send the mouse press";
 }
 bool init(){
+    Settings::ReadScope input_settings(cfg,true);
     std::lock_guard<std::recursive_mutex> connection(connection_mutex);
     close_port();
     plat_stage("input","connecting serial device");    plat_log("Connecting input device...");
@@ -286,7 +287,7 @@ bool init(){
         if(try_port(c)){
             inp.device_ok=true;
             inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
-            if(cfg.find("input.com")) cfg.find("input.com")->i=c;
+            cfg.set_int_if_unchanged("input.com",c,{{"input.com",cfg.I("input.com")},{"input.baud",cfg.I("input.baud")},{"input.mode",cfg.I("input.mode")}},false);
             plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();
             return true;
         }
@@ -296,7 +297,7 @@ bool init(){
         plat_log("No COM ports enumerated; probing COM1-COM32 directly, excluding known Bluetooth ports");
         for(int c=1;c<=32;c++)if(c!=wanted&&possible_unlisted_port(c)&&try_port(c)){
             inp.device_ok=true;inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
-            if(cfg.find("input.com"))cfg.find("input.com")->i=c;
+            cfg.set_int_if_unchanged("input.com",c,{{"input.com",cfg.I("input.com")},{"input.baud",cfg.I("input.baud")},{"input.mode",cfg.I("input.mode")}},false);
             plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();return true;
         }
     }

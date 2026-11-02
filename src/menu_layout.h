@@ -19,10 +19,10 @@ constexpr Point origin(float x,float y,const Size& menu,float host_width,float h
     return {clamp(x,menu.pad_x,maximum(menu.pad_x,host_width-menu.pad_x-menu.width)),clamp(y,menu.pad_y,maximum(menu.pad_y,host_height-menu.pad_y-menu.height))};
 }
 struct Cell {float x=0,y=0,width=0;};
-struct Tabs {std::vector<Cell> cells;float height=0;};
+struct Tabs {std::vector<Cell> cells;float height=0,row_height=32;};
 inline constexpr float tab_height=32,tab_gap=4;
-constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available){
-    Tabs result;if(minimum_widths.empty())return result;available=maximum(1,available);
+constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available,float minimum_height=tab_height){
+    Tabs result;result.row_height=maximum(tab_height,minimum_height);if(minimum_widths.empty())return result;available=maximum(1,available);
     std::size_t start=0;float y=0;
     while(start<minimum_widths.size()){
         std::size_t end=start;float used=0;
@@ -33,7 +33,7 @@ constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available){
         }
         const float extra=maximum(0,(available-used)/static_cast<float>(end-start));float x=0;
         for(auto i=start;i<end;++i){const float width=minimum(available,maximum(1,minimum_widths[i]))+extra;result.cells.push_back({x,y,width});x+=width;}
-        start=end;y+=tab_height+tab_gap;
+        start=end;y+=result.row_height+tab_gap;
     }
     result.height=y-tab_gap;return result;
 }

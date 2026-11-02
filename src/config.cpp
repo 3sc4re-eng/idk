@@ -8,7 +8,11 @@
 Settings cfg;
 thread_local std::string Settings::context;
 thread_local bool Settings::visual_team=false;
+thread_local std::string Settings::parents_context;
+thread_local std::vector<std::string> Settings::context_parents;
 void Settings::register_all(){
+    WriteScope settings_edit(*this);
+    defb("aim.visible_check","Visibility check",true);
     defb("aim.prediction","Projectile lead",true);defb("trigger.prediction","Fire at predicted intercept",true);defb("trigger.magnet_prediction","Magnet projectile lead",true);defb("dbg.ballistics","Show live weapon ballistics",false);
     defb("system.autosave","Save changes automatically",true);defb("hud.keybinds","Show keybind status",true);
     defk("system.recache_key","Refresh game data key",VK_HOME);
@@ -1148,4 +1152,5 @@ void Settings::register_all(){
     for(auto& kv:m)if(kv.first.rfind("esp.",0)==0){auto value=kv.second;value.path="team."+kv.first;if(kv.first=="esp.enabled")value.b=false;teammates.push_back(value);}
     for(auto& setting:teammates)m[setting.path]=setting;
     for(auto& pair:m)pair.second.help=setting_help::describe(pair.first,pair.second.name);
+    if(auto* setting=find("aim.visible_check"))setting->help="Require clear map visibility to the sampled aim joint. On by default. Switch off only for diagnosis; native joint coordinates and current data are still required. Projectile obstruction checks follow this option.";
 }

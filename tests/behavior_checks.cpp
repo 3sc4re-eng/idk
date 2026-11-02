@@ -80,7 +80,7 @@ int main(){
     cfg.find("trigger.enabled")->b=true;cfg.find("trigger.activation")->i=1;
     cfg.find("trigger.first_shot_delay_min")->f=cfg.find("trigger.first_shot_delay_max")->f=500;
     cfg.find("trigger.followup_delay_min")->f=20;cfg.find("trigger.followup_delay_max")->f=40;
-    trig::previous_hero="Deadlock/hero/Unknown";trig::toggled=true;trig::last_key=(GetAsyncKeyState(cfg.I("trigger.key"))&0x8000)!=0;trig::disarm();
+    trig::previous_context=profile_scope::for_entity(snap.local);trig::toggled=true;trig::last_key=(GetAsyncKeyState(cfg.I("trigger.key"))&0x8000)!=0;trig::disarm();
     trig::tick(1000,1000);assert(trig::state.armed&&trig::state.last_shot==0&&trig::state.ready_at>now_ms());
     trig::state.ready_at=now_ms();trig::tick(1000,1000);assert(trig::state.last_shot>0);
     u64 shot=trig::state.last_shot;assert(trig::state.ready_at-shot>=20&&trig::state.ready_at-shot<=40);

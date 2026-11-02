@@ -21,6 +21,7 @@
 namespace esp{
 static ImU32 col_of(Color c){ return IM_COL32((int)(c.r*255),(int)(c.g*255),(int)(c.b*255),(int)(clampf(c.a,0,1)*255)); }
 static void draw_entity(ImDrawList* dl,const Entity& e,const esp_render::Local& me,u64 W,u64 H,const esp_render::Snapshot& frame){
+    if(e.cls==EClass::Player&&e.alive_valid&&!e.alive)return;
     Settings::VisualScope side(e.cls==EClass::Player&&e.team==me.team);
     if(!(e.cls==EClass::Player?cfg.B("esp.enabled"):cfg.B("world.enabled")))return;
     float d=world_units::metres(me.pos.dist(e.pos));

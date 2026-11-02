@@ -2,7 +2,13 @@
 
 Use [CHANGELOG.md](CHANGELOG.md) for the current implementation state, limitations and next steps. The dated reports below are historical; their successful checks and executable hashes do not verify subsequent source changes.
 
-At this update, the project has 114 bundled source blocks. `dist\loader.exe` and its passed receipt still belong to build `20261102T093519Z-5f851ea792` with 108 blocks. The newer 118-file integration is staged outside the project and has not been delivered. No live reader-performance fix is verified. Only Deadlock has a live backend; authentication is local, and Heroes automation and automatic melee parry have since been removed from the active menu.
+Current source and product now match: 114 bundled blocks, build `20261102T125006Z-515b457ddc`. `dist\loader.exe` SHA-256 is `3e5d9c6738277f95453f162d87e2c9f0903c94047fd2dd38dab09052027a3fcc`; the current `.ace-build-result.json` records a passed product build and source/executable verification.
+
+The standard script completed with `-CompileOnly`: 31 syntax-check units and 11 linked regression suites. No regression binary, product, preview or hardware/input path was executed. This is compile/link/artifact evidence, not mini-PC runtime proof. See changelog Updates 006–007 for the focused launcher, menu, dead-player rendering, settings synchronization and aim/visibility diagnostic changes. The earlier 118-file full-skeleton proposal remains staged outside the project and is not included.
+
+Only Deadlock has a live backend. Game fields remain version-specific; remote authentication/licensing, full skeletal rendering, animated chams/wireframe/model outlines and other game backends are not implemented. Heroes automation and automatic melee parry were removed from the active menu, with some dormant helper code remaining. No new live reader rate, successful native aiming, complete cooldown replication or map collision result is claimed.
+
+The maintained source is uploaded to [3sc4re-eng/idk](https://github.com/3sc4re-eng/idk); repository availability must be distinguished from runtime verification.
 
 # Historical: DMA test checkpoint, 1 November 2026
 

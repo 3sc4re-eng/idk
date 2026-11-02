@@ -59,12 +59,14 @@ constexpr bool any_visible(const Styles& styles){for(const auto& style:styles)if
 // Preserve an imported active custom style before its checkbox can be switched
 // off on the first displayed frame. Appearance is never reseeded here.
 inline void prepare_edit(Settings& settings,std::size_t category) {
+    Settings::WriteScope settings_edit(settings);
     const auto& p=keys(category);
     if(settings.B(p.custom.c_str())&&!settings.B(p.initialized.c_str())){
-        settings.find(p.initialized.c_str())->b=true;settings.dirty=true;
+        settings.find(p.initialized.c_str())->b=true;settings.mark_dirty();
     }
 }
 inline void register_all(Settings& settings) {
+    Settings::WriteScope settings_edit(settings);
     for(std::size_t i=0;i<world_style_catalog::count;++i){const auto& p=keys(i);
         settings.defb(p.enabled.c_str(),"Show this category",true);settings.defb(p.custom.c_str(),"Custom style",true);
         settings.defb(p.initialized.c_str(),"World style initialized",false); // Internal first-edit state; never exposed/searchable.
@@ -76,10 +78,11 @@ inline void register_all(Settings& settings) {
 }
 // Copy only appearance. The category master is never changed by style reset.
 inline void copy_shared(Settings& settings,std::size_t category) {
+    Settings::WriteScope settings_edit(settings);
     const auto value=shared(settings);const auto& p=keys(category);
     settings.find(p.label.c_str())->b=value.label;settings.find(p.icon.c_str())->b=value.icon;
     settings.find(p.distance.c_str())->b=value.distance;settings.find(p.color.c_str())->c=value.color;
     settings.find(p.icon_size.c_str())->f=value.icon_size;settings.find(p.text_size.c_str())->f=value.text_size;
-    settings.find(p.draw_distance.c_str())->i=value.draw_distance;settings.find(p.initialized.c_str())->b=true;settings.dirty=true;
+    settings.find(p.draw_distance.c_str())->i=value.draw_distance;settings.find(p.initialized.c_str())->b=true;settings.mark_dirty();
 }
 }

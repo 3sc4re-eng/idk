@@ -45,6 +45,8 @@ void tick(u64 sw,u64 sh){
     int mode=cfg.I("aim.mode");bool enabled=mode==2||(mode==1?toggle:key);
     if(enabled&&!was_engaged){session=(unsigned)(rnd()*4294967295.0);activation_started=now_ms();}if(!enabled)activation_started=0;was_engaged=enabled;
     const bool output_permitted=game_data_permits_output();
+    const bool visibility_check=cfg.B("aim.visible_check");
+    unsigned eligible=0,native_points=0,screen_points=0,known_points=0,clear_points=0;bool visibility_delay=false;
     if(!output_permitted||(snap.backend_managed&&(!local.weapon_valid||local.disarmed||local.reloading))||!enabled||!cfg.B("aim.enabled")||inp.panic||!local.base){reset();
         wait_reason=!cfg.B("aim.enabled")?"Aim disabled":(inp.panic?"Panic enabled":(!enabled?"Waiting for activation":(!output_permitted?game_output_reason():(!local.weapon_valid?"Weapon data unavailable":(local.disarmed?"Disarmed":(local.reloading?"Reloading":"Local player unavailable"))))));return;}
     if(activation_started&&now_ms()-activation_started<(u64)cfg.F("aim.start_delay_ms")){wait_reason="Aim start delay";state.movement={};return;}
@@ -52,12 +54,21 @@ void tick(u64 sw,u64 sh){
     if(snap.backend_managed&&!native_joint_demand::selected_regions()){reset();wait_reason="Select Head or Neck in target point priority";return;}
     if(cfg.B("aim.target_players"))native_demand.request(native_joint_demand::selected_regions(),world_units::units(cfg.F("aim.max_dist")));
     Vec2 center{sw*.5f,sh*.5f};float radius=aim_model::fov_radius((float)sw,cfg.F("aim.fov"));
-    auto viable=[&](const Entity& e){return (!snap.backend_managed||(e.visible_since&&now_ms()-e.visible_since>=(u64)cfg.F("aim.visible_ms")))&&e.base&&e.alive&&(!cfg.B("target.team_check")||e.team!=local.team)&&local.pos.dist(e.pos)<=world_units::units(cfg.F("aim.max_dist"))&&(!cfg.B("aim.skip_fast")||e.vel.len()<=cfg.F("aim.max_speed"));};
+    auto viable=[&](const Entity& e){return (!visibility_check||!snap.backend_managed||(e.visible_since&&now_ms()-e.visible_since>=(u64)cfg.F("aim.visible_ms")))&&e.base&&e.alive&&(!cfg.B("target.team_check")||e.team!=local.team)&&local.pos.dist(e.pos)<=world_units::units(cfg.F("aim.max_dist"))&&(!cfg.B("aim.skip_fast")||e.vel.len()<=cfg.F("aim.max_speed"));};
     int current=-1,best=-1;aim_model::Point locked,best_point;float best_score=1e30f;
     for(size_t i=0;i<enemies.size();i++){
-        auto& e=enemies[i];if(!viable(e)||(snap.backend_managed&&cfg.I("aim.priority")==2&&!entity_health::current(e)))continue;unsigned stamp=aim_model::bone_stamp();
+        auto& e=enemies[i];
+        if(!e.base||!e.alive||(cfg.B("target.team_check")&&e.team==local.team)||local.pos.dist(e.pos)>world_units::units(cfg.F("aim.max_dist"))||(cfg.B("aim.skip_fast")&&e.vel.len()>cfg.F("aim.max_speed")))continue;
+        ++eligible;
+        for(int region=0;region<aim_model::bone_count;++region)if(cfg.I(aim_model::key(region).c_str())>=0){
+            Vec3 point;if(!aim_model::region_world(e,region,point))continue;++native_points;
+            if(!aim_model::on_screen(world_to_screen(point,sw,sh),(float)sw,(float)sh))continue;++screen_points;
+            if(e.bone_visibility_known[region])++known_points;if(e.bone_visible[region])++clear_points;
+        }
+        if(!viable(e)){visibility_delay|=visibility_check;continue;}
+        if(snap.backend_managed&&cfg.I("aim.priority")==2&&!entity_health::current(e))continue;unsigned stamp=aim_model::bone_stamp();
         int preferred=e.base==state.base&&stamp==state.stamp?state.bone:-1;
-        auto p=aim_model::weighted_select(e,sw,sh,aim_model::acquisition_roll(e.base,session),(e.base==state.base&&cfg.B("aim.hard_lock"))?1e30f:radius,preferred);if(!p.valid())continue;
+        auto p=aim_model::weighted_select(e,sw,sh,aim_model::acquisition_roll(e.base,session),(e.base==state.base&&cfg.B("aim.hard_lock"))?1e30f:radius,preferred,visibility_check);if(!p.valid())continue;
         if(e.base==state.base){current=(int)i;locked=p;}
         if(p.distance>radius)continue;
         float score=cfg.I("aim.priority")==1?local.pos.dist(e.pos):(cfg.I("aim.priority")==2?e.hp:p.distance);
@@ -66,7 +77,10 @@ void tick(u64 sw,u64 sh){
     }
     u64 now=now_ms();
     if(current>=0&&cfg.B("aim.hard_lock")){best=current;best_point=locked;}
-    if(best<0){state.movement={};state.pending_base=0;return;}
+    if(best<0){
+        wait_reason=!eligible?"No players pass target filters":!native_points?"Selected native joints unavailable (see joint log)":!screen_points?"Native joints outside the screen":visibility_check&&snap.backend_managed&&!known_points?"Visibility unknown: map or joint clearance unavailable":visibility_check&&snap.backend_managed&&!clear_points?"Selected joints obstructed":visibility_delay?"Waiting for minimum time in view":"No point passes FOV or target-state checks";
+        state.movement={};state.pending_base=0;return;
+    }
     if(state.base&&enemies[best].base!=state.base){
         if(state.pending_base!=enemies[best].base){state.pending_base=enemies[best].base;state.pending_at=now;}
         if(now-state.pending_at<(u64)cfg.F("aim.retarget_ms")){if(current>=0){best=current;best_point=locked;}else{state.movement={};return;}}
@@ -77,7 +91,7 @@ void tick(u64 sw,u64 sh){
     if(state.bone!=best_point.bone){state.bone=best_point.bone;state.movement={};state.stamp=aim_model::bone_stamp();}
     state.stamp=aim_model::bone_stamp();
     float dt=state.last_tick?(now-state.last_tick)/1000.f:1.f/60;state.last_tick=now;
-    flight_seconds=0;if(cfg.B("aim.prediction")&&snap.backend_managed){auto predicted=lead::point(local.current_shot,enemies[best],best_point.bone,sw,sh);prediction_status=predicted.reason;if(!predicted.valid){wait_reason=prediction_status;state.movement={};return;}best_point.screen=predicted.screen;flight_seconds=predicted.solution.flight;prediction_status=local.current_shot.name+": estimated flight "+std::to_string((int)(flight_seconds*1000))+" ms";}else prediction_status="Projectile lead is off";
+    flight_seconds=0;if(cfg.B("aim.prediction")&&snap.backend_managed){auto predicted=lead::point(local.current_shot,enemies[best],best_point.bone,sw,sh,visibility_check);prediction_status=predicted.reason;if(!predicted.valid){wait_reason=prediction_status;state.movement={};return;}best_point.screen=predicted.screen;flight_seconds=predicted.solution.flight;prediction_status=local.current_shot.name+": estimated flight "+std::to_string((int)(flight_seconds*1000))+" ms";}else prediction_status="Projectile lead is off";
     // Handoff is measured against the SAME final point used for movement.
     // Prediction-unavailable returns above; an unverified intercept is never used.
     target_idx=best;target_screen=best_point.screen;
@@ -379,6 +393,7 @@ namespace esp{ void draw(u64 sw,u64 sh); }
 namespace esp{
 static ImU32 col_of(Color c){ return IM_COL32((int)(c.r*255),(int)(c.g*255),(int)(c.b*255),(int)(clampf(c.a,0,1)*255)); }
 static void draw_entity(ImDrawList* dl,const Entity& e,const esp_render::Local& me,u64 W,u64 H,const esp_render::Snapshot& frame){
+    if(e.cls==EClass::Player&&e.alive_valid&&!e.alive)return;
     Settings::VisualScope side(e.cls==EClass::Player&&e.team==me.team);
     if(!(e.cls==EClass::Player?cfg.B("esp.enabled"):cfg.B("world.enabled")))return;
     float d=world_units::metres(me.pos.dist(e.pos));
@@ -915,9 +930,6 @@ namespace loaderui{bool run(bool preview=false,bool automatic_deadlock_menu=fals
 #include "aceui.h"
 #include "config.h"
 #include "build_info.h"
-#include "input.h"
-#include "dma.h"
-#include "offsets.h"
 #include "game.h"
 #include "game_icons.h"
 #include "icon.h"
@@ -931,17 +943,11 @@ namespace loaderui{bool run(bool preview=false,bool automatic_deadlock_menu=fals
 #include <windows.h>
 #include <direct.h>
 #include <string>
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <chrono>
 #include <cstdio>
-#include <fstream>
 #include <vector>
 #include <cstring>
 #include <algorithm>
 #include <cctype>
-#include <exception>
 extern char g_ace_user[64];
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
 namespace loaderui{
@@ -975,23 +981,6 @@ static LRESULT CALLBACK LdWndProc(HWND h,UINT m,WPARAM w,LPARAM l){
 static void fatal_box(const char* what){plat_log("FATAL: %s",what);MessageBoxA(nullptr,what,"ACE",MB_OK|MB_ICONERROR);}
 static void load_font(){aceui::fonts();}
 static void ace_style(){aceui::style();auto color=[](const char* key){auto c=cfg.C(key);return ImVec4(c.r,c.g,c.b,c.a);};aceui::theme(color("ui.accent"),color("ui.background"),color("ui.panel"),color("ui.text"));}
-static void ensure_dma_engine(){for(const char* name:{"vmm.dll","leechcore.dll","ftd3xx.dll"})plat_log("Runtime file %s: %s",name,GetFileAttributesA(name)==INVALID_FILE_ATTRIBUTES?"MISSING":"present");}
-struct PState{std::string input="detecting...";};static PState st;static std::mutex stx;
-static std::atomic<bool> worker_run{true},worker_done{false};
-static void worker(){
-    try{
-        if(cfg.B("input.autoconnect")&&cfg.I("input.mode")!=2)hw::init();
-        {std::lock_guard<std::mutex> lock(stx);st.input=inp.device_text;}
-        ensure_dma_engine();
-    }catch(const std::exception& error){
-        plat_log("Loader device setup failed: %s",error.what());std::lock_guard<std::mutex> lock(stx);st.input="Device setup failed; see Log";
-    }catch(...){
-        plat_log("Loader device setup failed with an unknown exception");std::lock_guard<std::mutex> lock(stx);st.input="Device setup failed; see Log";
-    }
-    // The launch preflight waits for this entire worker, including runtime-file
-    // checks, before touching the DMA library. Completion is published last.
-    worker_done=true;
-}
 static bool make_swap_chain(HWND hwnd,int& bw,int& bh,IDXGISwapChain** swap,ID3D11Device** dev,ID3D11DeviceContext** ctx){
     static const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0,D3D_FEATURE_LEVEL_10_1,D3D_FEATURE_LEVEL_10_0,D3D_FEATURE_LEVEL_9_3,D3D_FEATURE_LEVEL_9_1};
     RECT client{};if(!GetClientRect(hwnd,&client)||client.right-client.left<8||client.bottom-client.top<8){RECT bounds=loader_initial_rect(hwnd);SetWindowPos(hwnd,nullptr,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,SWP_NOZORDER|SWP_NOACTIVATE);UpdateWindow(hwnd);GetClientRect(hwnd,&client);}
@@ -1008,9 +997,17 @@ static void game_art(int index,ImVec2 box){
     ImVec2 p=ImGui::GetCursorScreenPos();auto* draw=ImGui::GetWindowDrawList();draw->AddRectFilled(p,{p.x+box.x,p.y+box.y},ImGui::GetColorU32(ImGuiCol_FrameBg),8);
     if(auto image=game_icons::get(index)){unsigned iw=0,ih=0;game_icons::dimensions(index,iw,ih);if(iw&&ih){float scale=std::min(box.x/iw,box.y/ih),width=iw*scale,height=ih*scale;ImVec2 a{p.x+(box.x-width)*.5f,p.y+(box.y-height)*.5f};draw->AddImage(image,a,{a.x+width,a.y+height});}}ImGui::Dummy(box);
 }
-struct PreflightResult{bool matched=false;AttachPhase phase=AttachPhase::Idle;std::string message;GameModule* game=nullptr;};
 bool run(bool preview,bool automatic_deadlock_menu){
     if(preview&&automatic_deadlock_menu)return false;
+    // ACE_LAUNCHER_WAIT_MENU_V1: selecting a menu is independent of attachment.
+    // Unsupported entries stay unavailable; the existing overlay worker still
+    // validates the selected game's backend before any reader can start.
+    if(automatic_deadlock_menu){
+        if(!games::DEADLOCK.live)return false;
+        games::selected=&games::DEADLOCK;snprintf(g_ace_user,64,"Local session");
+        plat_log("Automatic menu request: Deadlock; opening menu, waiting for game.");
+        return true;
+    }
     WNDCLASSEXW wc{};wc.cbSize=sizeof(wc);wc.style=CS_HREDRAW|CS_VREDRAW;wc.lpfnWndProc=LdWndProc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"ACELoader";wc.hCursor=LoadCursorA(nullptr,IDC_ARROW);
     HICON ic=preview?LoadIconA(nullptr,IDI_APPLICATION):ensure_ace_icon();if(ic){wc.hIcon=ic;wc.hIconSm=ic;}
     if(!RegisterClassExW(&wc)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS){fatal_box("ACE: could not register window class");return false;}
@@ -1022,58 +1019,13 @@ bool run(bool preview,bool automatic_deadlock_menu){
     auto target=[&](){HRESULT result=swap->GetBuffer(0,IID_PPV_ARGS(&back));if(SUCCEEDED(result))result=dev->CreateRenderTargetView(back,nullptr,&rtv);if(back){back->Release();back=nullptr;}return SUCCEEDED(result);};
     if(!target()){fatal_box("ACE: could not create render target");swap->Release();ctx->Release();dev->Release();DestroyWindow(hwnd);return false;}
     IMGUI_CHECKVERSION();ImGui::CreateContext();ImGui::GetIO().IniFilename=nullptr;load_font();ace_style();ImGui_ImplWin32_Init(hwnd);ImGui_ImplDX11_Init(dev,ctx);game_icons::initialize(dev);
-    std::thread background;worker_run=true;worker_done=false;if(!preview){try{background=std::thread(worker);}catch(const std::exception& error){worker_done=true;std::lock_guard<std::mutex> lock(stx);st.input="Device worker could not start; see Log";plat_log("Device thread start failed: %s",error.what());}}
-    char last_err[128]="";bool launch=false,done=false;int selected=0;snprintf(g_ace_user,64,"Local session");
-    std::atomic<bool> check_running{false},check_finished{false},closing{false};std::thread check_thread;std::mutex check_mutex;
-    PreflightResult check_result;bool check_attempted=false;std::string check_progress;AttachPhase last_phase=AttachPhase::Idle;
-    auto clear_check=[&](){check_attempted=false;last_phase=AttachPhase::Idle;std::lock_guard<std::mutex> lock(check_mutex);check_result={};check_progress.clear();};
-    auto begin_check=[&](GameModule* requested,bool refresh){
-        if(preview||check_running||!requested||!requested->live)return;
-        if(check_thread.joinable())check_thread.join();
-        check_attempted=true;last_phase=AttachPhase::Idle;last_err[0]=0;check_finished=false;check_running=true;
-        {std::lock_guard<std::mutex> lock(check_mutex);check_result={};check_progress="Waiting for device setup";}
-        try{check_thread=std::thread([&,requested,refresh](){
-            PreflightResult result;result.game=requested;
-            auto progress=[&](const char* text){std::lock_guard<std::mutex> lock(check_mutex);check_progress=text;};
-            try{
-                while(!worker_done&&!closing)std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                if(closing){result.phase=AttachPhase::Error;result.message="Game check cancelled";}
-                else if(!requested->live){result.phase=AttachPhase::Error;result.message="This game is unavailable";}
-                else{
-                    progress("Connecting DMA");plat_stage("launch","initializing DMA connection");
-                    if(!mem.ready()&&!mem.init_vmm()){result.phase=AttachPhase::Error;result.message=mem.status.text;}
-                    else if(closing){result.phase=AttachPhase::Error;result.message="Game check cancelled";}
-                    else{
-                        if(refresh){progress("Refreshing memory caches");bool refreshed=mem.refresh_caches();plat_log("Launch retry cache refresh: %s",refreshed?"complete":"unavailable");}
-                        progress("Checking game");plat_stage("launch",std::string("checking ")+requested->name);
-                        bool matched=off.resolve(requested);result.phase=off.phase();result.message=off.status_text();
-                        result.matched=matched&&off.resolved.load()&&result.phase==AttachPhase::Ready;
-                        if(!result.matched&&result.phase!=AttachPhase::UpdateRequired)result.phase=AttachPhase::Error;
-                    }
-                }
-            }catch(const std::exception& error){result.matched=false;result.phase=AttachPhase::Error;result.message=std::string("Game check failed: ")+error.what();plat_log("Launch preflight exception: %s",error.what());}
-            catch(...){result.matched=false;result.phase=AttachPhase::Error;result.message="Game check failed; see Log";plat_log("Launch preflight failed with an unknown exception");}
-            if(result.message.empty())result.message=result.matched?"Game verified":"Game check did not complete";
-            plat_log("Launch preflight: %s | %s",result.matched?"verified":"blocked",result.message.c_str());
-            {std::lock_guard<std::mutex> lock(check_mutex);check_result=std::move(result);check_progress.clear();}
-            check_running=false;check_finished=true;
-        });}catch(const std::exception& error){
-            {std::lock_guard<std::mutex> lock(check_mutex);check_result={false,AttachPhase::Error,"Could not start game check; see Log",requested};check_progress.clear();}
-            plat_log("Game check thread start failed: %s",error.what());check_running=false;check_finished=true;
-        }
-    };
-    if(automatic_deadlock_menu){plat_log("Automatic menu request: Deadlock; normal device and game preflight required.");begin_check(&games::DEADLOCK,false);}
+    bool launch=false,done=false;int selected=0;snprintf(g_ace_user,64,"Local session");
     u64 opened=now_ms();
     while(!done){
         MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){if(msg.message==WM_QUIT){done=true;break;}TranslateMessage(&msg);DispatchMessageW(&msg);}if(done)break;
-        if(check_finished.exchange(false)){
-            if(check_thread.joinable())check_thread.join();PreflightResult result;{std::lock_guard<std::mutex> lock(check_mutex);result=check_result;}
-            last_phase=result.phase;
-            if(result.matched&&result.game&&result.game->live&&!preview){games::selected=result.game;launch=true;done=true;break;}
-        }
         RECT client{};GetClientRect(hwnd,&client);int nextw=client.right,nexth=client.bottom;if(nextw<8||nexth<8){Sleep(25);continue;}
         if(nextw!=bw||nexth!=bh){ctx->OMSetRenderTargets(0,nullptr,nullptr);rtv->Release();rtv=nullptr;HRESULT result=swap->ResizeBuffers(0,nextw,nexth,DXGI_FORMAT_UNKNOWN,0);if(FAILED(result)||!target()){plat_log("Loader resize failed (0x%08X)",(unsigned)result);done=true;break;}bw=nextw;bh=nexth;}
-        bool busy=check_running.load()||check_thread.joinable();ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({(float)bw,(float)bh});
+        ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({(float)bw,(float)bh});
         ImGui::Begin("##AceSoftwareLauncher",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
         auto* d=ImGui::GetWindowDrawList();const auto& backdrop=ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);d->AddRectFilled({0,0},{(float)bw,(float)bh},ImGui::GetColorU32(ImVec4{backdrop.x,backdrop.y,backdrop.z,1}));
         float margin=bw<800?18.f:24.f,header=76.f,footer=72.f,gap=16.f;float left=std::clamp(bw*.30f,210.f,280.f),rightx=margin+left+gap,rightw=std::max(180.f,bw-rightx-margin),bodyh=std::max(100.f,bh-header-footer-margin);
@@ -1084,7 +1036,6 @@ bool run(bool preview,bool automatic_deadlock_menu){
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nBuild ID: %s",build_info::display,build_info::id);
         ImGui::SetCursorPos({(float)bw-margin-76,23});if(ImGui::Button("Log",{76,30}))plat_show_console();d->AddLine({margin,header-8},{(float)bw-margin,header-8},ImGui::GetColorU32(ImGuiCol_Separator));
         ImGui::SetCursorPos({margin,header});ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{10,12});ImGui::BeginChild("##game_library",{left,bodyh},true);ImGui::PopStyleVar();ImGui::TextUnformatted("Games");ImGui::Dummy({0,6});
-        ImGui::BeginDisabled(busy);
         for(int i=0;i<5;i++){
             ImGui::PushID(i);ImVec2 p=ImGui::GetCursorScreenPos();float width=ImGui::GetContentRegionAvail().x;bool clicked=ImGui::InvisibleButton("##game",{width,66});auto* card=ImGui::GetWindowDrawList();
             card->AddRectFilled(p,{p.x+width,p.y+66},ImGui::GetColorU32(selected==i?ImGuiCol_HeaderActive:ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_FrameBg),8);if(selected==i)card->AddRect(p,{p.x+width,p.y+66},aceui::purple,8,0,1.5f);
@@ -1092,32 +1043,23 @@ bool run(bool preview,bool automatic_deadlock_menu){
             card->PushClipRect({p.x+artw+18,p.y+8},{p.x+width-8,p.y+58},true);aceui::text(card,aceui::body,{p.x+artw+18,p.y+24},aceui::white,games::ALL[i]->name);card->PopClipRect();
             float label_width=std::max(0.f,width-artw-26.f),label_size=aceui::body->FontSize*ImGui::GetIO().FontGlobalScale;
             if(aceui::body->CalcTextSizeA(label_size,1000.f,0.f,games::ALL[i]->name).x>label_width&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",games::ALL[i]->name);
-            if(clicked&&!busy){selected=i;last_err[0]=0;clear_check();}ImGui::PopID();
-        }ImGui::EndDisabled();ImGui::EndChild();
+            if(clicked)selected=i;ImGui::PopID();
+        }ImGui::EndChild();
         ImGui::SetCursorPos({rightx,header});ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{22,20});ImGui::BeginChild("##game_panel",{rightw,bodyh},true);ImGui::PopStyleVar();float available=ImGui::GetContentRegionAvail().x;
         ImGui::TextDisabled("Local session");ImGui::Dummy({0,12});
         game_art(selected,{available,std::clamp(bodyh*.42f,100.f,190.f)});ImGui::Dummy({0,12});ImGui::PushFont(aceui::heading);ImGui::TextUnformatted(games::ALL[selected]->name);ImGui::PopFont();
         if(!games::ALL[selected]->live)ImGui::TextDisabled("Unavailable");
-            if(check_attempted){
-                ImGui::Dummy({0,12});ImGui::PushTextWrapPos(0);
-                if(busy){
-                    ImGui::TextColored({.94f,.76f,.43f,1},"Checking game...");std::string progress;{std::lock_guard<std::mutex> lock(check_mutex);progress=check_progress;}if(!progress.empty())ImGui::TextWrapped("%s",progress.c_str());
-                    auto phase=off.phase();if(phase==AttachPhase::FindingProcess||phase==AttachPhase::FindingModules||phase==AttachPhase::Validating)ImGui::TextWrapped("%s",off.status_text().c_str());
-                }else{
-                    PreflightResult result;{std::lock_guard<std::mutex> lock(check_mutex);result=check_result;}
-                    ImGui::TextColored(result.phase==AttachPhase::UpdateRequired?ImVec4{.94f,.76f,.43f,1}:ImVec4{1,.58f,.48f,1},"%s",result.phase==AttachPhase::UpdateRequired?"Update required":result.matched?"Game verified":"Game check failed");ImGui::TextWrapped("%s",result.message.c_str());
-                }ImGui::PopTextWrapPos();
-            }
-        if(last_err[0]){ImGui::Dummy({0,10});ImGui::PushTextWrapPos(0);ImGui::TextColored({1,.58f,.48f,1},"%s",last_err);ImGui::PopTextWrapPos();}ImGui::EndChild();
-        float footy=bh-footer+8;ImGui::SetCursorPos({margin,footy+8});if(!preview){std::lock_guard<std::mutex> lock(stx);ImGui::PushTextWrapPos(margin+left);ImGui::TextDisabled("%s",st.input.c_str());ImGui::PopTextWrapPos();}
-        ImGui::SetCursorPos({rightx,footy});bool unavailable=!games::ALL[selected]->live;ImGui::BeginDisabled(preview||unavailable||busy);
-        std::string action=busy?"Checking game...":last_phase==AttachPhase::UpdateRequired?"Recheck build":check_attempted?"Refresh and retry":std::string("Launch ")+games::ALL[selected]->name;
+        else{ImGui::Dummy({0,12});ImGui::TextWrapped("Open the menu now. ACE waits for the game and checks its backend in the background.");}
+        ImGui::EndChild();
+        float footy=bh-footer+8;ImGui::SetCursorPos({margin,footy+8});if(!preview){ImGui::PushTextWrapPos(margin+left);ImGui::TextDisabled("Ready to open the menu");ImGui::PopTextWrapPos();}
+        ImGui::SetCursorPos({rightx,footy});bool unavailable=!games::ALL[selected]->live;ImGui::BeginDisabled(preview||unavailable);
+        std::string action=std::string("Launch ")+games::ALL[selected]->name;
         if(ImGui::Button(action.c_str(),{rightw,44})&&now_ms()-opened>450){
-            begin_check(games::ALL[selected],check_attempted);
+            games::selected=games::ALL[selected];launch=true;done=true;
+            plat_log("Menu selected: %s; opening menu, waiting for game.",games::selected->name);
         }ImGui::EndDisabled();ImGui::End();
         ImGui::Render();float bg[]={backdrop.x,backdrop.y,backdrop.z,1};ctx->OMSetRenderTargets(1,&rtv,nullptr);ctx->ClearRenderTargetView(rtv,bg);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());swap->Present(1,0);if(launch)done=true;
     }
-    closing=true;worker_run=false;if(check_thread.joinable())check_thread.join();if(background.joinable())background.join();
     game_icons::shutdown();ImGui_ImplDX11_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();if(rtv)rtv->Release();swap->Release();ctx->Release();dev->Release();if(IsWindow(hwnd))DestroyWindow(hwnd);
     MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessageW(&msg);}return launch;
 }
@@ -1190,6 +1132,7 @@ namespace overlay{ int run(bool preview=false); }
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <map>
 extern char g_ace_user[64];
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
@@ -1330,6 +1273,7 @@ static std::string menu_search_lower(std::string value){std::transform(value.beg
 static constexpr int menu_search_name_rank(std::string_view name_terms,std::string_view query){return name_terms.find(query)==std::string_view::npos?1:0;}
 static_assert(menu_search_name_rank("menu font size","font")<menu_search_name_rank("custom style","font")&&menu_search_name_rank("esp font size","font")<menu_search_name_rank("text size(px)","font"),"Direct font setting names must precede alias-only matches.");
 static std::vector<MenuSearchDestination> menu_setting_destinations(){
+    Settings::WriteScope settings_edit(cfg);
     std::vector<MenuSearchDestination> result;
     auto add=[&](int tab,int page,const char* section,const char* section_aliases,std::initializer_list<const char*> paths){
         for(auto path:paths){
@@ -1353,7 +1297,7 @@ static std::vector<MenuSearchDestination> menu_setting_destinations(){
         }
     };
     add(0,0,"Aimbot / General","smooth smoothing curve FOV prediction dead zone",{"aim.enabled","aim.key","aim.mode","aim.fov","aim.fov_circle","aim.prediction","aim.smooth","aim.curve","aim.deadzone_fov","aim.deadzone_draw"});
-    add(0,0,"Aimbot / Targeting","target switch reaction delay",{"target.team_check","aim.target_players","aim.priority","aim.hard_lock","aim.max_dist","aim.skip_fast","aim.max_speed","aim.start_delay_ms","aim.act_delay_min","aim.act_delay_max","aim.retarget_ms","aim.visible_ms"});
+    add(0,0,"Aimbot / Targeting","target switch reaction delay",{"target.team_check","aim.target_players","aim.priority","aim.hard_lock","aim.max_dist","aim.visible_check","aim.skip_fast","aim.max_speed","aim.start_delay_ms","aim.act_delay_min","aim.act_delay_max","aim.retarget_ms","aim.visible_ms"});
     for(int region=0;region<7;++region)if(native_target::supports_region(region)){
         const auto path=aim_model::key(region);if(const auto* setting=cfg.find(path.c_str())){
             const auto label=setting->name+" / Aimbot / Bone selection";
@@ -1362,12 +1306,12 @@ static std::vector<MenuSearchDestination> menu_setting_destinations(){
     }
     add(1,0,"Triggerbot / General","trigger delay time between shots",{"trigger.enabled","trigger.key","trigger.activation","trigger.prediction","trigger.first_shot_delay_min","trigger.first_shot_delay_max","trigger.followup_delay_min","trigger.followup_delay_max","trigger.hitchance_min","trigger.max_dist","trigger.skip_fast","trigger.max_speed"});
     add(1,0,"Triggerbot / Magnet","magnet smoothing FOV curve",{"trigger.magnet","trigger.magnet_prediction","trigger.magnet_fov","trigger.magnet_visible_ms","trigger.magnet_smooth","trigger.magnet_curve","trigger.magnet_strength","trigger.magnet_deadzone_fov","trigger.magnet_max_dist"});
-    add(2,0,"Visuals / Gameplay master","global gameplay visuals ESP",{"visuals.enabled"});
+    add(2,0,"Visuals / Global display","global gameplay visuals ESP world projectile group",{"visuals.enabled","world.enabled"});
     for(int page=0;page<2;++page)add(2,page,page?"Visuals / Teammates":"Visuals / Enemies","player ESP",{"esp.enabled","esp.box","esp.health","esp.tracers","esp.head_circle","esp.name","esp.souls","esp.distance","esp.ultimate","esp.abilities","esp.draw_distance"});
     add(2,2,"Visuals / Minions","neutral bosses troopers",{"minions.enabled","minions.enemy","minions.friendly","minions.troopers","minions.neutral","minions.bosses","minions.box","minions.health","minions.name","minions.distance","minions.distance_limit","minions.color_enemy","minions.color_friendly"});
-    add(8,0,"World / Categories","world objects",{"visuals.enabled","world.enabled","cls.world"});
+    add(8,0,"World / Categories","world objects",{"cls.world"});
     if(edit_game=="Deadlock"&&selected_world_category<world_style_catalog::count&&!cfg.B(world_style_config::keys(selected_world_category).custom.c_str()))add(8,0,"World / Shared style","shared world defaults",{"esp.color_world","esp.draw_distance"});
-    add(9,0,"Projectiles","projectiles marker name distance color size range",{"visuals.enabled","world.enabled","cls.projectiles","projectiles.marker","projectiles.name","projectiles.distance","projectiles.marker_size","projectiles.font_size","projectiles.max_dist","esp.color_proj"});
+    add(9,0,"Projectiles","projectiles marker name distance color size range",{"cls.projectiles","projectiles.marker","projectiles.name","projectiles.distance","projectiles.marker_size","projectiles.font_size","projectiles.max_dist","esp.color_proj"});
     if(edit_game=="Deadlock")for(std::size_t i=0;i<world_style_catalog::count;++i){
         const auto& category=world_style_catalog::categories[i];const auto& p=world_style_config::keys(i);
         auto add_world=[&](const std::string& path){const auto* setting=cfg.find(path.c_str());if(!setting)return;
@@ -1397,6 +1341,7 @@ static void menu_toolbar_next(float required){
 }
 
 static void draw_item(const char* path,const char* tip){
+    Settings::WriteScope settings_edit(cfg);
     if(action_pause_policy::is_retired_key(path))return;
     Setting* s=cfg.find(path); if(!s)return;
     ImVec2 help_start=ImGui::GetCursorScreenPos();float help_width=ImGui::GetContentRegionAvail().x;
@@ -1414,7 +1359,7 @@ static void draw_item(const char* path,const char* tip){
             if(ImGui::BeginPopup("Element settings")){esp_options(path+4);ImGui::EndPopup();}ImGui::PopStyleVar();
         }
         ImGui::SetCursorPos({ImGui::GetWindowContentRegionMax().x-28,y});
-        if(aceui::toggle("##toggle",s->b)){cfg.dirty=true;if(std::string(path)=="system.fps_uncapped"&&s->b)if(auto* sync=cfg.find("system.overlay_vsync"))sync->b=false;}
+        if(aceui::toggle("##toggle",s->b)){cfg.mark_dirty();if(std::string(path)=="system.fps_uncapped"&&s->b)if(auto* sync=cfg.find("system.overlay_vsync"))sync->b=false;}
         ImGui::SetCursorPos({x,std::max(bottom,y+28.f)});
     }else{
         const float available=ImGui::GetContentRegionAvail().x;
@@ -1435,7 +1380,7 @@ static void draw_item(const char* path,const char* tip){
                 for(int button=0;button<5;button++)if(ImGui::GetIO().MouseDown[button])listen_held_mouse|=1u<<button;
             }
             if(listening&&captured_key){
-                if(captured_key!=VK_ESCAPE){s->i=Settings::normalize_binding(s->path,captured_key);cfg.dirty=true;}
+                if(captured_key!=VK_ESCAPE){s->i=Settings::normalize_binding(s->path,captured_key);cfg.mark_dirty();}
                 shortcut_block_key=captured_key;captured_key=0;listening_key.clear();
             }
         }else{
@@ -1468,7 +1413,7 @@ static void draw_item(const char* path,const char* tip){
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12,12});
                 if(ImGui::BeginCombo("##value",choices[v],ImGuiComboFlags_HeightRegular)){
                     for(int i=0;i<count;i++){
-                        if(ImGui::Selectable(choices[i],i==v)){s->i=i;cfg.dirty=true;}
+                        if(ImGui::Selectable(choices[i],i==v)){s->i=i;cfg.mark_dirty();}
                         if(i==v)ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
@@ -1477,14 +1422,14 @@ static void draw_item(const char* path,const char* tip){
             }else if(s->type==SType::Float){
                 const char* fmt=s->fstep<1?"%.1f":"%.0f";
                 float maximum=s->fmax;const bool zone=p=="aim.deadzone_fov"||p=="trigger.magnet_deadzone_fov";
-                if(zone){maximum=std::max(s->fmin,std::min(s->fmax,cfg.F(p=="aim.deadzone_fov"?"aim.fov":"trigger.magnet_fov")));float value=clampf(s->f,s->fmin,maximum);if(value!=s->f){s->f=value;cfg.dirty=true;}}
-                if(ImGui::SliderFloat("##value",&s->f,s->fmin,maximum,fmt,zone?ImGuiSliderFlags_AlwaysClamp:ImGuiSliderFlags_None)){if(zone)s->f=clampf(s->f,s->fmin,maximum);cfg.dirty=true;}
+                if(zone){maximum=std::max(s->fmin,std::min(s->fmax,cfg.F(p=="aim.deadzone_fov"?"aim.fov":"trigger.magnet_fov")));float value=clampf(s->f,s->fmin,maximum);if(value!=s->f){s->f=value;cfg.mark_dirty();}}
+                if(ImGui::SliderFloat("##value",&s->f,s->fmin,maximum,fmt,zone?ImGuiSliderFlags_AlwaysClamp:ImGuiSliderFlags_None)){if(zone)s->f=clampf(s->f,s->fmin,maximum);cfg.mark_dirty();}
             }else if(s->type==SType::Int){
-                if(ImGui::SliderInt("##value",&s->i,(int)s->fmin,(int)s->fmax))cfg.dirty=true;
+                if(ImGui::SliderInt("##value",&s->i,(int)s->fmin,(int)s->fmax))cfg.mark_dirty();
             }else if(s->type==SType::Color){
                 float v[]={s->c.r,s->c.g,s->c.b,s->c.a};
                 if(ImGui::ColorEdit4("##value",v,ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_AlphaBar)){
-                    s->c={v[0],v[1],v[2],v[3]};cfg.dirty=true;
+                    s->c={v[0],v[1],v[2],v[3]};cfg.mark_dirty();
                 }
             }
         }
@@ -1528,16 +1473,16 @@ static float menu_tab_row_width(const char* const* labels,int count){
 }
 static bool menu_tabs(const char* id,const char* const* labels,int count,int& selected,float width){
     bool changed=false;ImGui::PushID(id);const auto origin=ImGui::GetCursorScreenPos();
-    const auto plan=menu_layout::tabs(menu_tab_widths(labels,count),width);auto* draw=ImGui::GetWindowDrawList();
+    const auto plan=menu_layout::tabs(menu_tab_widths(labels,count),width,ImGui::GetTextLineHeight()+12.f);auto* draw=ImGui::GetWindowDrawList();
     for(int i=0;i<count;++i){const auto& cell=plan.cells[static_cast<std::size_t>(i)];const ImVec2 at{origin.x+cell.x,origin.y+cell.y};
         ImGui::SetCursorScreenPos(at);ImGui::PushID(i);
-        if(ImGui::InvisibleButton("##tab",{cell.width,menu_layout::tab_height})){selected=i;changed=true;}
+        if(ImGui::InvisibleButton("##tab",{cell.width,plan.row_height})){selected=i;changed=true;}
         const bool active=selected==i;const float inset=std::min(12.f,cell.width*.25f);
-        draw->AddRectFilled({at.x+2,at.y+1},{at.x+cell.width-2,at.y+menu_layout::tab_height-2},ImGui::GetColorU32(active?ImGuiCol_HeaderActive:ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_ChildBg),5);
-        if(active)draw->AddRectFilled({at.x+inset,at.y+menu_layout::tab_height-3},{at.x+cell.width-inset,at.y+menu_layout::tab_height-1},aceui::purple,1);
+        draw->AddRectFilled({at.x+2,at.y+1},{at.x+cell.width-2,at.y+plan.row_height-2},ImGui::GetColorU32(active?ImGuiCol_HeaderActive:ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_ChildBg),5);
+        if(active)draw->AddRectFilled({at.x+inset,at.y+plan.row_height-3},{at.x+cell.width-inset,at.y+plan.row_height-1},aceui::purple,1);
         const auto text=ImGui::CalcTextSize(labels[i]);const float text_inset=std::min(8.f,cell.width*.25f);
-        draw->PushClipRect({at.x+text_inset,at.y},{at.x+cell.width-text_inset,at.y+menu_layout::tab_height},true);
-        draw->AddText({at.x+std::max(text_inset,(cell.width-text.x)*.5f),at.y+(menu_layout::tab_height-text.y)*.5f},active?aceui::white:aceui::muted,labels[i]);draw->PopClipRect();
+        draw->PushClipRect({at.x+text_inset,at.y},{at.x+cell.width-text_inset,at.y+plan.row_height},true);
+        draw->AddText({at.x+std::max(text_inset,(cell.width-text.x)*.5f),at.y+(plan.row_height-text.y)*.5f},active?aceui::white:aceui::muted,labels[i]);draw->PopClipRect();
         if(text.x>cell.width-text_inset*2&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",labels[i]);ImGui::PopID();
     }
     ImGui::SetCursorScreenPos(origin);ImGui::Dummy({width,plan.height});ImGui::PopID();return changed;
@@ -1548,30 +1493,39 @@ static void menu_notice(const std::string& message,float width,float height){
     ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(message.c_str());ImGui::PopTextWrapPos();
     ImGui::EndChild();ImGui::PopStyleVar();
 }
-// A measured, fixed-height row owns its title and master control. It does not
-// depend on the previous frame's AutoResize child height or draw over a label.
+// The title and toggle share one measured item. A narrow heading puts the
+// toggle below its wrapped title; no child/table cursor can move the next row up.
 static void menu_page_heading(const char* label,const char* master,float width,bool compact=false){
-    ImFont* font=compact?aceui::body:aceui::heading;const float padding=compact?5.f:8.f;
-    const float label_width=std::max(1.f,width-24.f-(master?40.f:0.f));
-    ImGui::PushFont(font);const float label_height=ImGui::CalcTextSize(label,nullptr,false,label_width).y;ImGui::PopFont();
-    const float height=std::max(20.f,label_height)+padding*2.f+6.f;
-    ImGui::PushID(label);ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{12,padding});ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{0,0});
-    const bool visible=ImGui::BeginChild("##page_heading",{width,height},ImGuiChildFlags_Border,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-    if(visible&&ImGui::BeginTable("##heading_columns",master?2:1,ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoPadOuterX|ImGuiTableFlags_NoSavedSettings)){
-        ImGui::TableSetupColumn("Title",ImGuiTableColumnFlags_WidthStretch);
-        if(master)ImGui::TableSetupColumn("Enabled",ImGuiTableColumnFlags_WidthFixed,28.f);
-        ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::PushFont(font);ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(label);ImGui::PopTextWrapPos();ImGui::PopFont();
-        if(master){ImGui::TableSetColumnIndex(1);if(auto* setting=cfg.find(master)){ImGui::PushID(master);if(aceui::toggle("##page_master",setting->b))cfg.dirty=true;ImGui::PopID();if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",setting->help.c_str());}}
-        ImGui::EndTable();
+    Settings::WriteScope settings_edit(cfg);
+    ImFont* font=compact?aceui::body:aceui::heading;const float padding=compact?6.f:9.f;
+    const float inner_width=menu_layout::maximum(1.f,width-24.f);
+    ImGui::PushFont(font);
+    const bool stacked=master&&inner_width<menu_layout::maximum(120.f,ImGui::GetFontSize()*8.f);
+    const float label_width=menu_layout::maximum(1.f,inner_width-(master&&!stacked?40.f:0.f));
+    const float label_height=ImGui::CalcTextSize(label,nullptr,false,label_width).y;
+    const float content_height=stacked?label_height+6.f+20.f:menu_layout::maximum(master?20.f:0.f,label_height);
+    const float height=std::ceil(content_height+padding*2.f);const auto origin=ImGui::GetCursorScreenPos();
+    auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(origin,{origin.x+width,origin.y+height},ImGui::GetColorU32(ImGuiCol_ChildBg),3.f);
+    draw->AddRect(origin,{origin.x+width,origin.y+height},ImGui::GetColorU32(ImGuiCol_Border),3.f);
+    ImGui::PushID(label);
+    ImGui::SetCursorScreenPos({origin.x+12.f,origin.y+padding+(stacked?0.f:(content_height-label_height)*.5f)});
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+label_width);ImGui::TextUnformatted(label);ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    if(master)if(auto* setting=cfg.find(master);setting&&setting->type==SType::Bool){
+        ImGui::SetCursorScreenPos({stacked?origin.x+12.f:origin.x+width-40.f,origin.y+padding+(stacked?label_height+6.f:(content_height-20.f)*.5f)});
+        ImGui::PushID(master);if(aceui::toggle("##page_master",setting->b))cfg.mark_dirty();ImGui::PopID();
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",setting->help.c_str());
     }
-    ImGui::EndChild();ImGui::PopStyleVar(2);ImGui::PopID();
+    ImGui::SetCursorScreenPos(origin);ImGui::Dummy({width,height});ImGui::PopID();
 }
 
 static void items(std::initializer_list<const char*> paths){for(auto p:paths)draw_item(p,"");}
 static void world_category_list(float /*height*/){
+    Settings::WriteScope settings_edit(cfg);
     const auto destination=world_style_config::category_from_path(menu_search_target);
     if(destination!=world_style_catalog::missing){selected_world_category=destination;world_category_filter[0]=0;}
-    control_card("##world_master","WORLD OBJECTS",[&]{items({"visuals.enabled","world.enabled","cls.world"});});
+    control_card("##world_master","WORLD OBJECTS",[&]{items({"cls.world"});});
     if(edit_game!="Deadlock")return;
     ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##world_category_search","Search categories...",world_category_filter,sizeof(world_category_filter));
     const auto query=menu_search_lower(world_category_filter);std::size_t matches=0;
@@ -1580,7 +1534,7 @@ static void world_category_list(float /*height*/){
         if(menu_search_lower(std::string(category.label)+" "+category.help).find(query)==std::string::npos)continue;
         ++matches;ImGui::PushID(static_cast<int>(i));const auto at=ImGui::GetCursorScreenPos();const float width=ImGui::GetContentRegionAvail().x;
         const bool selected=selected_world_category==i;const auto& key=world_style_config::keys(i);auto* enabled=cfg.find(key.enabled.c_str());
-        if(ImGui::Selectable("##category",selected,0,{width,29})){selected_world_category=i;if(enabled){enabled->b=!enabled->b;cfg.dirty=true;}}
+        if(ImGui::Selectable("##category",selected,0,{width,29})){selected_world_category=i;if(enabled){enabled->b=!enabled->b;cfg.mark_dirty();}}
         const bool hovered=ImGui::IsItemHovered();auto* draw=ImGui::GetWindowDrawList();draw->AddText({at.x+8,at.y+7},aceui::white,category.label);
         const bool on=enabled&&enabled->b;draw->AddRectFilled({at.x+width-34,at.y+8},{at.x+width-6,at.y+22},on?aceui::purple:IM_COL32(66,67,72,255),7);draw->AddCircleFilled({at.x+width-(on?13.f:27.f),at.y+15},5,aceui::white,20);
         if(menu_scroll_window&&menu_search_target==key.enabled){ImGui::ScrollToRectEx(menu_scroll_window,ImRect(at,{at.x+width,at.y+29}),ImGuiScrollFlags_KeepVisibleEdgeY);menu_search_target.clear();}
@@ -1637,11 +1591,12 @@ static bool editing_inherited=false;
 // Imported enabled override maps may be partial. Materialize only their missing
 // scoped keys before any editable header/body can receive a fallback pointer.
 static void complete_menu_override(const std::string& scope,const std::vector<std::string>& parents={}){
+    Settings::WriteScope settings_edit(cfg);
     auto& values=cfg.overrides[scope];Settings::Scope inherited(scope,parents);
     for(const auto& entry:cfg.m){
         if(!Settings::scoped(entry.first)||values.find(entry.first)!=values.end())continue;
         const auto* inherited_value=cfg.resolved(entry.first.c_str());
-        values.emplace(entry.first,inherited_value?*inherited_value:entry.second);cfg.dirty=true;
+        values.emplace(entry.first,inherited_value?*inherited_value:entry.second);cfg.mark_dirty();
     }
 }
 static void scope_selector(float width){
@@ -1672,6 +1627,8 @@ static void scope_selector(float width){
         }
         ImGui::EndCombo();
     }ImGui::PopStyleVar();cfg.context.clear();editing_inherited=false;
+    // Profile loading/saving above must finish before entering the editor lock.
+    Settings::WriteScope settings_edit(cfg);
     if(edit_game!="Deadlock"){
         std::string global=edit_game+"/Global";if(cfg.overrides.find(global)==cfg.overrides.end())cfg.enable_override(global,true);complete_menu_override(global);Settings::set_context(global);
     }
@@ -1742,11 +1699,10 @@ static bool save_named_profile(const std::string& name,std::string* error){
     std::error_code ec;std::filesystem::create_directories("configs",ec);if(ec)return fail("Could not create or access the configs folder.");
     const bool exists=std::filesystem::exists(profile_path(name),ec);if(ec)return fail("Could not inspect the destination profile.");
     if(exists){Settings validation;validation.register_all();if(!validation.load(profile_path(name))){protected_profile_ids.insert(profile_identity(name));return fail("The destination file could not be loaded and was left unchanged. Create a new profile instead.");}}
-    const bool previous_dirty=cfg.dirty;bool saved=false;
-    try{saved=cfg.save(profile_path(name));}catch(...){cfg.dirty=previous_dirty;return fail("Could not write the profile.");}
-    if(!saved){cfg.dirty=previous_dirty;return fail("Could not write the profile.");}
-    if(!profile_lifecycle_policy::same_name(name,active_slot))cfg.dirty=previous_dirty;
-    else{last_save_failed=false;last_save_time=now_ms();}
+    const bool save_active=profile_lifecycle_policy::same_name(name,active_slot);bool saved=false;
+    try{saved=cfg.save(profile_path(name),save_active);}catch(...){return fail("Could not write the profile.");}
+    if(!saved)return fail("Could not write the profile.");
+    if(save_active){last_save_failed=false;last_save_time=now_ms();}
     return true;
 }
 static bool load_profile_now(const std::string& name){
@@ -1817,13 +1773,15 @@ static void switch_profile_game(const std::string& name){
 static ImU32 priority_color(int p){return p==2?IM_COL32(229,181,75,255):(p==1?IM_COL32(235,235,241,255):(p==0?IM_COL32(123,125,140,255):IM_COL32(54,55,65,140)));}
 static const char* priority_name(int p){return p==2?"High":(p==1?"Medium":(p==0?"Low":"Ignore"));}
 static void draw_pair(const char* label,const char* lo,const char* hi,float maximum){
+    Settings::WriteScope settings_edit(cfg);
     auto* a=cfg.find(lo);auto* b=cfg.find(hi);if(!a||!b)return;ImGui::PushID(lo);
     ImGui::TextUnformatted(label);ImGui::SetNextItemWidth(-1);
-    if(ImGui::SliderFloat("##minimum",&a->f,1,maximum,"Minimum: %.0f ms")){a->f=std::min(a->f,b->f);cfg.dirty=true;}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the shortest delay.",a->help.c_str());
-    ImGui::SetNextItemWidth(-1);if(ImGui::SliderFloat("##maximum",&b->f,1,maximum,"Maximum: %.0f ms")){b->f=std::max(b->f,a->f);cfg.dirty=true;}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the longest delay.",b->help.c_str());
+    if(ImGui::SliderFloat("##minimum",&a->f,1,maximum,"Minimum: %.0f ms")){a->f=std::min(a->f,b->f);cfg.mark_dirty();}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the shortest delay.",a->help.c_str());
+    ImGui::SetNextItemWidth(-1);if(ImGui::SliderFloat("##maximum",&b->f,1,maximum,"Maximum: %.0f ms")){b->f=std::max(b->f,a->f);cfg.mark_dirty();}if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nDrag the slider to set the longest delay.",b->help.c_str());
     ImGui::Separator();ImGui::PopID();
 }
 static void aim_points(bool heading=true){
+    Settings::WriteScope settings_edit(cfg);
     if(heading)section("TARGET POINT PRIORITY");
     const int values[]={2,1,0,-1};const char* priorities[]={"High","Medium","Low","Ignore"};
     for(int bone:{0,1,2,3,4,5,6}){
@@ -1831,7 +1789,7 @@ static void aim_points(bool heading=true){
         auto key=aim_model::key(bone);auto* setting=cfg.find(key.c_str());if(!setting)continue;int current=3;for(int i=0;i<4;i++)if(values[i]==setting->i)current=i;
         const auto region_start=ImGui::GetCursorScreenPos();
         ImGui::PushID(bone);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(aim_model::bone_names[bone]);ImGui::SameLine(ImGui::GetContentRegionAvail().x*.42f);ImGui::SetNextItemWidth(-1);
-        if(ImGui::BeginCombo("##priority",priorities[current])){for(int i=0;i<4;i++)if(ImGui::Selectable(priorities[i],i==current)){setting->i=values[i];cfg.dirty=true;}ImGui::EndCombo();}
+        if(ImGui::BeginCombo("##priority",priorities[current])){for(int i=0;i<4;i++)if(ImGui::Selectable(priorities[i],i==current)){setting->i=values[i];cfg.mark_dirty();}ImGui::EndCombo();}
         if(menu_scroll_window&&menu_search_target==key){ImGui::ScrollToRectEx(menu_scroll_window,ImRect(region_start,{region_start.x+ImGui::GetContentRegionAvail().x,ImGui::GetCursorScreenPos().y}),ImGuiScrollFlags_KeepVisibleEdgeY);menu_search_target.clear();}
         if(ImGui::IsItemHovered())ImGui::SetTooltip("Higher priority increases this region's selection weight; distance to your crosshair also matters. Ignore prevents selection. The choice stays stable while tracking.");ImGui::PopID();
     }
@@ -1880,9 +1838,10 @@ static void draw_aim_figure(){
         ImGui::SetTooltip("Both circles stay centered on your crosshair. Assistance stops while the final aim point is inside the gold ring and resumes outside. Both values use full-cone angles.%s",reference?" Diagram uses a reference projection until live camera data is available.":"");
 }
 static void draw_esp_builder(bool heading=true,float canvas_height=400){
+    Settings::WriteScope settings_edit(cfg);
     using namespace esp_elements;if(heading)section("ESP PREVIEW");
-    if(ImGui::SmallButton("Reset layout")){for(int i=0;i<Count;i++)if(auto* setting=cfg.find(position_keys[i]))setting->i=default_sides[i];cfg.dirty=true;}
-    menu_toolbar_next(ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Visible").x);if(auto* state=cfg.find("esp.preview_visible")){if(ImGui::Checkbox("Visible",&state->b))cfg.dirty=true;if(ImGui::IsItemHovered())ImGui::SetTooltip("Preview the visible-player style. This changes only the model preview.");}
+    if(ImGui::SmallButton("Reset layout")){for(int i=0;i<Count;i++)if(auto* setting=cfg.find(position_keys[i]))setting->i=default_sides[i];cfg.mark_dirty();}
+    menu_toolbar_next(ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Visible").x);if(auto* state=cfg.find("esp.preview_visible")){if(ImGui::Checkbox("Visible",&state->b))cfg.mark_dirty();if(ImGui::IsItemHovered())ImGui::SetTooltip("Preview the visible-player style. This changes only the model preview.");}
     const bool visible=cfg.B("esp.preview_visible");
     auto canvas=model_canvas(canvas_height,false);if(!canvas.frame.texture)return;auto* d=ImGui::GetWindowDrawList();auto origin=canvas.origin;
     float x1=origin.x+canvas.frame.minimum.x,x2=origin.x+canvas.frame.maximum.x,y1=origin.y+canvas.frame.minimum.y,y2=origin.y+canvas.frame.maximum.y;
@@ -1897,32 +1856,34 @@ static void draw_esp_builder(bool heading=true,float canvas_height=400){
     auto blocks=place(enabled,sizes,x1,y1,x2,y2);fit_preview(blocks,{origin.x+4,origin.y+4},{origin.x+canvas.width-4,origin.y+canvas.height-4});preview_element_bounds.clear();static int dragging=-1;
     for(int i=0;i<Count;i++)if(blocks[i].enabled){auto& b=blocks[i];preview_element_bounds.push_back(ImRect(b.position,{b.position.x+b.size.x,b.position.y+b.size.y}));
         bool hover=ImGui::IsMouseHoveringRect(origin,{origin.x+canvas.width,origin.y+canvas.height})&&ImGui::IsMouseHoveringRect(b.position,{b.position.x+b.size.x,b.position.y+b.size.y});if(hover&&ImGui::IsMouseClicked(0))dragging=i;
-        if(dragging==i&&ImGui::IsMouseDown(0)){auto mouse=ImGui::GetIO().MousePos;float dx=(mouse.x-(x1+x2)*.5f)/std::max(1.f,(x2-x1)*.5f),dy=(mouse.y-(y1+y2)*.5f)/std::max(1.f,(y2-y1)*.5f);int side=std::fabs(dx)>std::fabs(dy)?(dx<0?2:3):(dy<0?0:1);if(side!=b.side){cfg.find(position_keys[i])->i=side;cfg.dirty=true;}}
+        if(dragging==i&&ImGui::IsMouseDown(0)){auto mouse=ImGui::GetIO().MousePos;float dx=(mouse.x-(x1+x2)*.5f)/std::max(1.f,(x2-x1)*.5f),dy=(mouse.y-(y1+y2)*.5f)/std::max(1.f,(y2-y1)*.5f);int side=std::fabs(dx)>std::fabs(dy)?(dx<0?2:3):(dy<0?0:1);if(side!=b.side){cfg.find(position_keys[i])->i=side;cfg.mark_dirty();}}
         if(i==Abilities)draw_abilities(d,b.position,row);else esp_text(d,features[i],b.position,hover?aceui::purple:(i==Ultimate?esp_rgba(cfg.C("esp.ultimate_color")):esp_rgba(esp_element_color(features[i],visible))),text[i]);
         if(hover)d->AddRect({b.position.x-2,b.position.y-2},{b.position.x+b.size.x+2,b.position.y+b.size.y+2},aceui::purple,2);
-        ImGui::PushID(features[i]);if(hover&&ImGui::IsMouseClicked(1))ImGui::OpenPopup("Preview element");ImGui::SetNextWindowSize({360,0},ImGuiCond_Appearing);if(ImGui::BeginPopup("Preview element")){esp_options(features[i]);if(ImGui::Button("Hide this element")){cfg.find(enabled_keys[i])->b=false;cfg.dirty=true;ImGui::CloseCurrentPopup();}ImGui::EndPopup();}ImGui::PopID();
+        ImGui::PushID(features[i]);if(hover&&ImGui::IsMouseClicked(1))ImGui::OpenPopup("Preview element");ImGui::SetNextWindowSize({360,0},ImGuiCond_Appearing);if(ImGui::BeginPopup("Preview element")){esp_options(features[i]);if(ImGui::Button("Hide this element")){cfg.find(enabled_keys[i])->b=false;cfg.mark_dirty();ImGui::CloseCurrentPopup();}ImGui::EndPopup();}ImGui::PopID();
         if(hover)ImGui::SetTooltip("Drag to place %s above, below, left or right. Right-click for settings.",titles[i]);
     }
     d->PopClipRect();if(!ImGui::IsMouseDown(0))dragging=-1;ImGui::PushFont(aceui::small);ImGui::PushTextWrapPos(0);ImGui::TextDisabled("Drag any label or the ability row to place it. Right-click for settings.");ImGui::PopTextWrapPos();ImGui::PopFont();
     ImGui::TextDisabled("Hidden elements");bool first_hidden=true;
     for(int i=0;i<Count;i++)if(!enabled[i]){
         if(!first_hidden)menu_toolbar_next(ImGui::CalcTextSize(titles[i]).x+ImGui::GetStyle().FramePadding.x*2);
-        ImGui::PushID(features[i]);if(ImGui::SmallButton(titles[i])){cfg.find(enabled_keys[i])->b=true;cfg.dirty=true;}ImGui::PopID();first_hidden=false;
+        ImGui::PushID(features[i]);if(ImGui::SmallButton(titles[i])){cfg.find(enabled_keys[i])->b=true;cfg.mark_dirty();}ImGui::PopID();first_hidden=false;
     }
 
 }
 static void output_binding(const char* path){
+    Settings::WriteScope settings_edit(cfg);
     auto* setting=cfg.find(path);if(!setting)return;
-    int normalized=Settings::normalize_binding(path,setting->i);if(normalized!=setting->i){setting->i=normalized;cfg.dirty=true;}
+    int normalized=Settings::normalize_binding(path,setting->i);if(normalized!=setting->i){setting->i=normalized;cfg.mark_dirty();}
     if(inp.keyboard_ok){draw_item(path,"Choose a keyboard key, Middle Mouse, Mouse 4 or Mouse 5 bound to this action in the game. Left and Right Mouse are reserved for activation and shooting.");return;}
     ImGui::PushID(path);ImGui::TextUnformatted(setting->name.c_str());
     const int values[]={0,VK_MBUTTON,VK_XBUTTON1,VK_XBUTTON2};const char* names[]={"Not bound","Mouse 3 (middle)","Mouse 4 (side)","Mouse 5 (side)"};
     constexpr int count=sizeof(values)/sizeof(values[0]);int selected=-1;for(int i=0;i<count;i++)if(setting->i==values[i])selected=i;ImGui::SetNextItemWidth(-1);
-    if(ImGui::BeginCombo("##output",selected>=0?names[selected]:"Keyboard binding unavailable")){for(int i=0;i<count;i++)if(ImGui::Selectable(names[i],selected==i)){setting->i=values[i];cfg.dirty=true;}ImGui::EndCombo();}
+    if(ImGui::BeginCombo("##output",selected>=0?names[selected]:"Keyboard binding unavailable")){for(int i=0;i<count;i++)if(ImGui::Selectable(names[i],selected==i)){setting->i=values[i];cfg.mark_dirty();}ImGui::EndCombo();}
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Choose Middle Mouse, Mouse 4 or Mouse 5 bound to this action in the game. Keyboard delivery must be verified before keyboard bindings are available.");ImGui::PopID();
 }
 static void input_binding_help(){if(!inp.keyboard_ok)ImGui::TextWrapped("Bind this action to Middle Mouse, Mouse 4 or Mouse 5 in the game, then select it above.");}
 static void threat_list(const std::string& prefix){
+    Settings::WriteScope settings_edit(cfg);
     ImGui::PushID(prefix.c_str());static char filter[96]="";ImGui::InputTextWithHint("##threat_filter","Search heroes, abilities or items",filter,sizeof(filter));
     const bool counterspell=prefix=="defense.counterspell.";
     auto matches=[&](std::string value){std::string needle=filter;std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return (char)std::tolower(c);});std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return (char)std::tolower(c);});return needle.empty()||value.find(needle)!=std::string::npos;};
@@ -1968,6 +1929,7 @@ static void hero_defense(unsigned id){
     section("SELECT THREATS");threat_list(p);
 }
 static void cleanse_effects(){
+    Settings::WriteScope settings_edit(cfg);
     section("EFFECTS TO CLEANSE");static char filter[80]="";static std::set<u32> observed;
     {std::lock_guard<std::mutex> lock(snap_mtx);for(auto token:snap.local.removable_debuffs)observed.insert(token);}
     ImGui::InputTextWithHint("##cleanse_filter","Search effect or source",filter,sizeof(filter));std::string needle=filter;
@@ -1975,7 +1937,7 @@ static void cleanse_effects(){
     for(const auto& entry:ability_data::entries){auto* proof=cleanse_data::find(entry.token);if(!entry.enemy||entry.passive||(!proof&&!observed.count(entry.token)))continue;
         std::string label=std::string(entry.title)+(proof?std::string(" (")+proof->effects+")":"");std::string lower=label;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return (char)std::tolower(c);});if(!needle.empty()&&lower.find(needle)==std::string::npos)continue;
         std::string key="cleanse.watch."+std::to_string(entry.token);auto* setting=cfg.find(key.c_str());if(!setting)continue;
-        ImGui::PushID((int)entry.token);ImGui::BeginGroup();if(ImGui::Checkbox("##selected",&setting->b))cfg.dirty=true;ImGui::SameLine(0,7);ImGui::TextWrapped("%s",label.c_str());ImGui::EndGroup();if(ImGui::IsItemHovered())ImGui::SetTooltip("Use a configured cleanse only while this source has an active removable enemy effect on you.");ImGui::PopID();
+        ImGui::PushID((int)entry.token);ImGui::BeginGroup();if(ImGui::Checkbox("##selected",&setting->b))cfg.mark_dirty();ImGui::SameLine(0,7);ImGui::TextWrapped("%s",label.c_str());ImGui::EndGroup();if(ImGui::IsItemHovered())ImGui::SetTooltip("Use a configured cleanse only while this source has an active removable enemy effect on you.");ImGui::PopID();
     }
 }
 static void automatic_usage(const autouse::Rule& rule){
@@ -2008,13 +1970,19 @@ static void debug_overlay(u64 width,u64 height){
     if(cfg.B("dbg.ballistics")){Entity local;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;}const auto& shot=local.current_shot;char text[240];if(shot.valid)snprintf(text,sizeof(text),"%s | %.1f m/s | estimated flight %.0f ms",shot.name.c_str(),world_units::metres(shot.speed),aim::flight_seconds*1000);else snprintf(text,sizeof(text),"Projectile lead: %s",shot.reason.c_str());ImGui::GetForegroundDrawList()->AddText({20,220},aceui::white,text);}
 
     if(!cfg.B("dbg.targets")&&!cfg.B("dbg.rays")&&!cfg.B("dbg.timing"))return;
-    Entity local;std::vector<Entity> enemies;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;enemies=snap.enemies;}
+    Entity local;Vec3 camera;bool camera_valid=false;std::vector<Entity> enemies;{std::lock_guard<std::mutex> lock(snap_mtx);local=snap.local;camera=snap.camera;camera_valid=snap.camera_valid;enemies=snap.enemies;}
     auto* draw=ImGui::GetForegroundDrawList();
     for(auto& enemy:enemies){auto point=world_to_screen(enemy.pos+Vec3{0,0,90},width,height);if(!aim_model::on_screen(point,(float)width,(float)height))continue;
         const char* reason=(snap.backend_managed&&!enemy.alive_valid)?"Life/current HP unknown":!enemy.alive?"Dead":enemy.bullet_invuln?"Bullet immune / Metal Skin":enemy.invuln?"Invulnerable":!enemy.occlusion_valid?"Occlusion unknown":!enemy.visible?"No visible shot":local.disarmed?"Local disarmed":local.reloading?"Reloading":"";
         if(cfg.B("dbg.targets")&&*reason)draw->AddText({point.x,point.y},IM_COL32(255,160,80,255),reason);
-        if(cfg.B("dbg.rays")){Vec3 from=local.pos+Vec3{0,0,45},to=enemy.pos+Vec3{0,0,55};auto ray=collision::trace(from,to,collision::Bullet);auto a=world_to_screen(from,width,height),b=world_to_screen(ray.known?ray.hit:to,width,height);
-            if(aim_model::on_screen(a,(float)width,(float)height)&&aim_model::on_screen(b,(float)width,(float)height)){auto color=!ray.known?IM_COL32(255,180,80,255):ray.clear?IM_COL32(90,220,150,255):IM_COL32(250,80,90,255);draw->AddLine({a.x,a.y},{b.x,b.y},color,1.5f);draw->AddCircleFilled({b.x,b.y},3,color);}
+        if(cfg.B("dbg.rays")&&camera_valid){
+            for(int region=0;region<2;++region){Vec3 to;if(!native_target::point(enemy,region,to,snap.native_binding_epoch.load(),mem.attachment_epoch(),now_ms()))continue;
+                const auto projected=world_to_screen(to,width,height);if(!aim_model::on_screen(projected,(float)width,(float)height))continue;
+                auto ray=collision::trace_any(camera,to,collision::Vision|collision::Bullet);
+                auto end=world_to_screen(ray.known?ray.hit:to,width,height);if(!aim_model::on_screen(end,(float)width,(float)height))continue;
+                const auto color=!ray.known?IM_COL32(255,180,80,255):ray.clear?IM_COL32(90,220,150,255):IM_COL32(250,80,90,255);
+                draw->AddLine({width*.5f,height*.5f},{end.x,end.y},color,1.5f);draw->AddCircleFilled({end.x,end.y},3,color);
+            }
         }
     }
     if(cfg.B("dbg.timing")){char text[180];snprintf(text,sizeof(text),"Reader %d Hz | poll %llu ms | publish %llu ms | last scan %llu ms | age %llu ms",snap.read_hz.load(),(unsigned long long)snap.poll_ms.load(),(unsigned long long)snap.publish_ms.load(),(unsigned long long)snap.scan_ms.load(),(unsigned long long)(now_ms()-snap.last_read_ms.load()));draw->AddText({18,42},IM_COL32(235,235,245,255),text);}
@@ -2085,8 +2053,17 @@ static bool make_overlay_swap_chain(HWND hwnd,int& W,int& H,IDXGISwapChain** swa
 }
 static std::atomic<bool> dma_thread_run{false},dma_restart_requested{false};
 static void dma_worker(){
+    auto failed=[](const char* detail){
+        dma_thread_run=false;
+        {std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=std::string("Attachment worker stopped: ")+detail;}
+        plat_log("Attachment worker stopped: %s",detail);
+    };
+    try{
+    if(!dma_thread_run)return;
+    for(const char* name:{"vmm.dll","leechcore.dll","ftd3xx.dll"})plat_log("Runtime file %s: %s",name,GetFileAttributesA(name)==INVALID_FILE_ATTRIBUTES?"MISSING":"present");
+    plat_stage("attach","waiting for game");
     // A slow or missing input device must not delay an already validated reader.
-    if(off.resolved)entity_thread_start(); // Loader preflight already bound this layout.
+    if(off.resolved)entity_thread_start(); // An existing validated attachment may resume; menu launch alone never sets this flag.
     if(cfg.B("input.autoconnect")&&cfg.I("input.mode")!=2&&!inp.device_ok)hw::init();
     u64 last_try=0;
     while(dma_thread_run){
@@ -2100,15 +2077,17 @@ static void dma_worker(){
                     if(mem.init_vmm())plat_log("Overlay: DMA card connected");
                     else{std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=mem.status.text;}
                 }
-                if(mem.ready()){
+                if(mem.ready()&&dma_thread_run){
                     consume_attach_recovery();bool matched=off.resolve(games::selected);auto status=off.status_text();
                     {std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status=status;}
-                    if(matched){toast("Game layout validated. Waiting for live data.",{0.3f,1,0.5f,1});entity_thread_start();}
+                    if(matched&&dma_thread_run){toast("Game layout validated. Waiting for live data.",{0.3f,1,0.5f,1});entity_thread_start();}
                 }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    }catch(const std::exception& error){failed(error.what());}
+    catch(...){failed("unknown exception; see Log");}
 }
 
 int run(bool preview){
@@ -2119,7 +2098,10 @@ int run(bool preview){
     FramePacer frame_pacer;
     preview_session=preview;edit_game=games::selected->name;active_slot=selected_profile="default";
     profile_game_states.clear();Settings::context.clear();Settings::visual_team=false;
-    cfg=Settings{};cfg.register_all();protected_profile_ids.clear();pending_profile_name.clear();profile_message.clear();load_startup_profile();if(!preview)snap.backend_managed=true;
+    cfg=Settings{};cfg.register_all();protected_profile_ids.clear();pending_profile_name.clear();profile_message.clear();load_startup_profile();
+    // ACE_LAUNCHER_WAIT_MENU_V1: publish waiting text before the worker exists;
+    // keep all attachment/readiness flags under their existing backend owners.
+    if(!preview){snap.backend_managed=true;if(!off.resolved){std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status="Waiting for game; background attachment has not completed";}}
     WNDCLASSEXW wc{}; wc.cbSize=sizeof(WNDCLASSEXW);
     wc.style=CS_HREDRAW|CS_VREDRAW;
     wc.lpfnWndProc=WndProc;
@@ -2172,7 +2154,13 @@ int run(bool preview){
     plat_log("Overlay started. Menu open by default. Menu key: Left Ctrl. Panic: End.");
     dma_thread_run=!preview;
     std::thread dma_w;
-    if(!preview)dma_w=std::thread(dma_worker);
+    if(!preview){
+        try{dma_w=std::thread(dma_worker);}
+        catch(const std::exception& error){
+            dma_thread_run=false;{std::lock_guard<std::mutex> lock(snap_mtx);snap.backend_status="Attachment worker could not start; close ACE and retry";}
+            plat_log("Attachment worker could not start: %s",error.what());
+        }
+    }
     while(!done){
         auto frame_begin=std::chrono::steady_clock::now();
         MSG msg;
@@ -2202,14 +2190,14 @@ int run(bool preview){
         bool refresh_key=game_key_down(cfg.I("system.recache_key"))||(GetAsyncKeyState(cfg.I("system.recache_key"))&0x8000);static bool refresh_previous=false;if(!preview&&refresh_key&&!refresh_previous&&listening_key.empty())request_recache();refresh_previous=refresh_key;
         plat_stage("renderer","updating frame",false);
         // Normalize loaded/imported display combinations before any autosave.
-        if(cfg.B("system.fps_uncapped"))if(auto* sync=cfg.find("system.overlay_vsync"))if(sync->b){sync->b=false;cfg.dirty=true;}
+        {Settings::WriteScope settings_edit(cfg);if(cfg.B("system.fps_uncapped"))if(auto* sync=cfg.find("system.overlay_vsync"))if(sync->b){sync->b=false;cfg.mark_dirty();}}
         hw::update_diagnostics();snap.overlay_menu=menu_open;
         if(!preview){
         aim::tick((u64)W,(u64)H);
         trig::tick((u64)W,(u64)H);
         helpers::tick((u64)W,(u64)H);
         autosave_tick();
-        static u64 last_action_report=0;if(now_ms()-last_action_report>5000){last_action_report=now_ms();char target_state[512];{std::lock_guard<std::mutex> lock(snap_mtx);unsigned alive=0,visible=0,occlusion=0,immune=0;for(auto& e:snap.enemies){alive+=e.alive;visible+=e.visible;occlusion+=e.occlusion_valid;immune+=e.bullet_invuln||e.invuln;}snprintf(target_state,sizeof(target_state),"Target state: total=%u alive=%u visible=%u occlusion_known=%u immune=%u | local valid=%d alive=%d reloading=%d disarmed=%d weapon_valid=%d",(unsigned)snap.enemies.size(),alive,visible,occlusion,immune,snap.local.valid,snap.local.alive,snap.local.reloading,snap.local.disarmed,snap.local.weapon_valid);}plat_log("%s",target_state);plat_log("DMA state: %s",mem.diagnostics().c_str());plat_log("Render state: %.1f FPS, cap=%d (0=uncapped), VSync=%s, mode=%d",ImGui::GetIO().Framerate,cfg.B("system.fps_uncapped")?0:cfg.I("system.max_fps"),(!cfg.B("system.fps_uncapped")&&cfg.B("system.overlay_vsync"))?"on":"off",cfg.I("system.overlay_mode"));plat_log("Render timing: work %.2f ms, Present %.2f ms, limiter %.2f ms, Present HRESULT 0x%08X",render_timings.work_ms,render_timings.present_ms,render_timings.wait_ms,(unsigned)render_timings.present_result);plat_log("Action state: aim=%s target_index=%d trigger=%s output_gate=%s | %s | prediction=%s",aim::active?"active":"idle",aim::target_idx,trig::is_armed()?"armed":"idle",game_output_reason().c_str(),hw::diagnostic_summary().c_str(),aim::prediction_status.c_str());}
+        static u64 last_action_report=0;if(now_ms()-last_action_report>5000){last_action_report=now_ms();char target_state[512];{std::lock_guard<std::mutex> lock(snap_mtx);unsigned alive=0,visible=0,occlusion=0,immune=0;for(auto& e:snap.enemies){alive+=e.alive;visible+=e.visible;occlusion+=e.occlusion_valid;immune+=e.bullet_invuln||e.invuln;}snprintf(target_state,sizeof(target_state),"Target state: total=%u alive=%u visible=%u occlusion_known=%u immune=%u | local valid=%d alive=%d reloading=%d disarmed=%d weapon_valid=%d",(unsigned)snap.enemies.size(),alive,visible,occlusion,immune,snap.local.valid,snap.local.alive,snap.local.reloading,snap.local.disarmed,snap.local.weapon_valid);}plat_log("%s",target_state);plat_log("DMA state: %s",mem.diagnostics().c_str());plat_log("Render state: %.1f FPS, cap=%d (0=uncapped), VSync=%s, mode=%d",ImGui::GetIO().Framerate,cfg.B("system.fps_uncapped")?0:cfg.I("system.max_fps"),(!cfg.B("system.fps_uncapped")&&cfg.B("system.overlay_vsync"))?"on":"off",cfg.I("system.overlay_mode"));plat_log("Render timing: work %.2f ms, Present %.2f ms, limiter %.2f ms, Present HRESULT 0x%08X",render_timings.work_ms,render_timings.present_ms,render_timings.wait_ms,(unsigned)render_timings.present_result);plat_log("Action state: aim=%s target_index=%d trigger=%s output_gate=%s | %s | prediction=%s aim_reason=%s",aim::active?"active":"idle",aim::target_idx,trig::is_armed()?"armed":"idle",game_output_reason().c_str(),hw::diagnostic_summary().c_str(),aim::prediction_status.c_str(),aim::wait_reason.c_str());}
         }
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -2287,7 +2275,24 @@ int run(bool preview){
             const float search_width=stacked_header?cw:std::min(236.f,cw*.40f);
             const float title_width=stacked_header?cw:cw-search_width-16.f;
             ImGui::SetCursorPos({content_x,12});ImGui::PushFont(aceui::heading);ImGui::PushTextWrapPos(content_x+title_width);ImGui::TextUnformatted(names[tab]);ImGui::PopTextWrapPos();ImGui::PopFont();
-            ImGui::PushFont(aceui::small);ImGui::TextDisabled("%s",edit_game.c_str());ImGui::PopFont();
+            // Reuse the existing subtitle row; clip long status at large font
+            // sizes without changing title/search/tab vertical geometry.
+            ImGui::PushFont(aceui::small);std::string subtitle=edit_game;
+            if(!preview){
+                const auto phase=off.phase();const bool attached=off.resolved.load();
+                subtitle=attached?(snap.frame_valid.load()?"Live data ready":"Waiting for live data"):
+                    !dma_thread_run.load()?"Attachment worker unavailable":phase==AttachPhase::UpdateRequired?"Update required":
+                    phase==AttachPhase::FindingModules||phase==AttachPhase::Validating?"Checking game":"Waiting for game";
+            }
+            const auto subtitle_pos=ImGui::GetCursorScreenPos();const float subtitle_height=ImGui::GetTextLineHeight();
+            ImGui::InvisibleButton("##game_attachment_state",{title_width,subtitle_height});
+            d->PushClipRect(subtitle_pos,{subtitle_pos.x+title_width,subtitle_pos.y+subtitle_height},true);
+            aceui::text(d,aceui::small,subtitle_pos,ImGui::GetColorU32(ImGuiCol_TextDisabled),subtitle.c_str());d->PopClipRect();
+            if(ImGui::IsItemHovered()){
+                if(preview)ImGui::SetTooltip("%s",edit_game.c_str());
+                else ImGui::SetTooltip("%s | %s\n%s\n%s",edit_game.c_str(),subtitle.c_str(),off.status_text().c_str(),backend_status().c_str());
+            }
+            ImGui::PopFont();
             const float title_bottom=ImGui::GetCursorPosY(),search_y=stacked_header?title_bottom+6.f:18.f;
             const float tabs_y=std::max(title_bottom,search_y+ImGui::GetFrameHeight())+8.f,tabs_width=cw;
             ImGui::SetCursorPos({stacked_header?content_x:mw-16-search_width,search_y});ImGui::SetNextItemWidth(search_width);
@@ -2330,12 +2335,6 @@ int run(bool preview){
             else ImGui::Dummy({cw,0});
             float body_y=ImGui::GetCursorPosY()+12.f;
             ImGui::SetCursorPos({rail+16,body_y});
-            if(tab==2){
-                Settings::visual_team=false;menu_scroll_window=nullptr;
-                menu_page_heading("Gameplay ESP","visuals.enabled",cw,true);
-                body_y=ImGui::GetCursorPosY()+3;
-                ImGui::SetCursorPos({rail+16,body_y});
-            }
             const char* page_title=tab==2?(visual_page==0?"Enemy ESP":visual_page==1?"Teammate ESP":"Minion ESP"):names[tab];
             const char* page_master=tab==0?"aim.enabled":tab==1?"trigger.enabled":tab==2?(visual_page<2?"esp.enabled":"minions.enabled"):nullptr;
             Settings::visual_team=tab==2&&visual_page==1;
@@ -2357,12 +2356,15 @@ int run(bool preview){
 
             if(tab==0){
                 control_card("##aim_settings","ACTIVATION",[&]{items({"aim.enabled","aim.key","aim.mode","aim.fov","aim.fov_circle"});});
-                control_card("##aim_targeting","TARGETING",[&]{items({"aim.target_players","aim.max_dist","aim.priority","aim.hard_lock","aim.skip_fast"});if(cfg.B("aim.skip_fast"))items({"aim.max_speed"});});
+                control_card("##aim_targeting","TARGETING",[&]{items({"aim.target_players","aim.max_dist","aim.priority","aim.hard_lock","aim.visible_check","aim.skip_fast"});if(cfg.B("aim.skip_fast"))items({"aim.max_speed"});});
                 control_card("##aim_global_filter","FILTERS",[&]{draw_item("target.team_check","Global filter for every hero in the active profile. Hero overrides do not change this filter.");});
             }else if(tab==1){
                 control_card("##trigger_settings","ACTIVATION",[&]{items({"trigger.enabled","trigger.key","trigger.activation","trigger.prediction","trigger.hitchance_min","trigger.max_dist","trigger.skip_fast"});if(cfg.B("trigger.skip_fast"))items({"trigger.max_speed"});});
                 control_card("##trigger_timing","FIRING TIMING",[&]{draw_pair("Trigger delay","trigger.first_shot_delay_min","trigger.first_shot_delay_max",600);draw_pair("Time between shots","trigger.followup_delay_min","trigger.followup_delay_max",400);});
             }else if(tab==2){
+                // Shared display prerequisites appear once, below navigation,
+                // in the scrolling column. Category pages edit only cls.*.
+                control_card("##visual_global_display","GLOBAL DISPLAY",[&]{items({"visuals.enabled","world.enabled"});});
                 if(visual_page<2){
                     control_card("##player_rendering","RENDERING",[&]{items({"esp.box","esp.health","esp.tracers","esp.head_circle"});});
                     control_card("##player_information","PLAYER INFORMATION",[&]{items({"esp.name","esp.souls","esp.distance"});});
@@ -2374,7 +2376,7 @@ int run(bool preview){
                 }
             }else if(tab==8){world_category_list(ch);
             }else if(tab==9){
-                control_card("##projectile_rendering","PROJECTILE RENDERING",[&]{items({"visuals.enabled","world.enabled","cls.projectiles"});});
+                control_card("##projectile_rendering","PROJECTILE RENDERING",[&]{items({"cls.projectiles"});});
                 control_card("##projectile_elements","DISPLAY ELEMENTS",[&]{items({"projectiles.marker","projectiles.name","projectiles.distance"});});
             }else if(tab==4){
                 section("WEB RADAR");ImGui::BeginDisabled(radar::running());draw_item("radar.listen","");draw_item("radar.port","Stop the radar before changing access or port.");ImGui::EndDisabled();
@@ -2427,7 +2429,7 @@ int run(bool preview){
                     draw_item("reader.world_ms","");ImGui::TextDisabled("Publish: %llu ms",(unsigned long long)snap.publish_ms.load());
                 }else{
                     section("MENU APPEARANCE");items({"ui.accent","ui.background","ui.panel","ui.text","ui.splash"});
-                    if(ImGui::Button("Reset menu theme",{-1,30})){cfg.find("ui.accent")->c={.55f,.48f,.98f,1};cfg.find("ui.background")->c={.055f,.058f,.075f,1};cfg.find("ui.panel")->c={.078f,.083f,.105f,1};cfg.find("ui.text")->c={.92f,.92f,.96f,1};cfg.dirty=true;}
+                    if(ImGui::Button("Reset menu theme",{-1,30})){Settings::WriteScope settings_edit(cfg);cfg.find("ui.accent")->c={.55f,.48f,.98f,1};cfg.find("ui.background")->c={.055f,.058f,.075f,1};cfg.find("ui.panel")->c={.078f,.083f,.105f,1};cfg.find("ui.text")->c={.92f,.92f,.96f,1};cfg.mark_dirty();}
                 }
             }else{section("LIVE LOG");if(ImGui::Button("Show console")){SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);plat_show_console();}ImGui::SameLine();if(ImGui::Button("Copy log")){std::string text;for(auto& line:plat_recent_logs())text+=line+"\n";clipboard_set(text);}ImGui::BeginChild("##live_log",{0,0},true,ImGuiWindowFlags_HorizontalScrollbar);for(auto& line:plat_recent_logs())ImGui::TextUnformatted(line.c_str());if(ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-30)ImGui::SetScrollHereY(1.f);ImGui::EndChild();
             }
@@ -2641,8 +2643,9 @@ int main(int argc,char** argv){
     plat_log("Loader starting, ACE entity-reader recovery 2026-11-01 (DMA-only)");plat_log("%s | Build ID %s | UTC %s",build_info::display,build_info::id,build_info::utc);plat_stage("startup","loader");
     _mkdir("configs");
     cfg.register_all();
-    if(!loaderui::run(false,request==launch_request::Mode::DeadlockMenu)){hw::disconnect();plat_log("Loader window closed.");return 0;}
-    plat_stage("startup","overlay");plat_log("Overlay starting - loader validated the game layout; reader starts in background.");
+    if(!loaderui::run(false,request==launch_request::Mode::DeadlockMenu)){hw::disconnect();plat_log("Loader window closed.");plat_shutdown_diagnostics();return 0;}
+    // ACE_LAUNCHER_WAIT_MENU_V1: menu selection does not assert attachment.
+    plat_stage("startup","overlay");plat_log("Menu opening for %s; waiting for game. Backend attachment and validation run in the background.",games::selected->name);
     int rc=overlay::run();
     plat_log("Overlay closed by user. Saving config and exiting.");
     // The overlay saves the active named profile before returning.
@@ -2918,13 +2921,13 @@ inline bool region_world(const Entity& e,int index,Vec3& point){
     if(snap.backend_managed||index<0||index>=bone_count)return false;
     point=e.pos+Vec3{0,0,heights[index]};return true; // Isolated settings/test fixtures only.
 }
-// Existing bounds-region admission flags remain independently required.
-// They do not prove clearance to this separately sampled native joint.
-inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f){
-    Point best;if(!e.visible||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return best;
+// Clearance is recorded at the same sampled native joint used for selection.
+// Diagnostic bypass never creates absent joint coordinates.
+inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f,bool require_visibility=true){
+    Point best;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return best;
     Vec2 crosshair{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&(!e.occlusion_valid||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-crosshair).len();if(distance>limit)continue;
         if(priority>best.priority||(priority==best.priority&&distance<best.distance))best={p,i,priority,distance};
@@ -2933,12 +2936,12 @@ inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f){
 inline float projection_x(){if(!snap.backend_managed)return 1;std::lock_guard<std::mutex> lock(snap_mtx);return std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);}
 inline unsigned bone_stamp(){unsigned v=2166136261u;for(int i=0;i<bone_count;i++)v=(v^(unsigned)(cfg.I(key(i).c_str())+2))*16777619u;return v;}
 inline float acquisition_roll(u64 entity,unsigned session){u64 v=entity^(u64(session)<<32);v^=v>>33;v*=0xff51afd7ed558ccdULL;v^=v>>33;return (v&0xffffff)/16777216.f;}
-inline Point weighted_select(const Entity& e,u64 w,u64 h,float roll,float limit=1e30f,int preferred=-1){
-    Point none;if(!e.visible||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return none;
+inline Point weighted_select(const Entity& e,u64 w,u64 h,float roll,float limit=1e30f,int preferred=-1,bool require_visibility=true){
+    Point none;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return none;
     std::array<Point,bone_count> points{};std::array<float,bone_count> weights{};float total=0;
     Vec2 center{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&(!e.occlusion_valid||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-center).len();if(distance>limit)continue;
         points[i]={p,i,priority,distance};
@@ -3763,7 +3766,7 @@ void Client::sample_native_joints(Frame& f){
         const auto distance=f.local.pos.dist(e.pos);
         if(player&&e.valid&&std::isfinite(distance)){
             {Settings::VisualScope side(e.team==f.local.team);
-                requested|=native_joint_demand::visual_head(cfg.B("visuals.enabled")&&cfg.B("cls.players")&&cfg.B("esp.enabled")&&cfg.B("esp.head_circle"),
+                requested|=native_joint_demand::visual_head(cfg.B("visuals.enabled")&&cfg.B("cls.players")&&cfg.B("esp.enabled"),
                     player,e.valid,world_units::units((float)cfg.I("esp.draw_distance")),distance);}
             if(e.alive&&e.modifiers_valid&&!e.stealthed&&!e.invuln&&!e.bullet_invuln&&
                (!cfg.B("target.team_check")||e.team!=f.local.team))requested|=native_joint_demand::at_distance(actions,distance);
@@ -3780,11 +3783,12 @@ void Client::sample_native_joints(Frame& f){
     f.native_joint_performance=native_joint_bank_->sample(binding_.client,f.native_binding_epoch,work);
     const auto now=now_ms();if(f.native_joint_performance.demanded&&now-native_joint_log_>=5000){native_joint_log_=now;
         const auto& s=f.native_joint_performance;
-        plat_log("Native cached joints: demanded_rows=%u attempts=%u accepted_rows=%u warmups=%u warm_rows=%u cold_rows=%u plan_discards=%u budget_skips=%u backoff_skips=%u requested_host_bytes=%llu requests=%llu fresh_batches=%llu elapsed_ms=%llu; native_age=unknown",s.demanded,s.attempted,s.accepted,s.warmups,s.warm_rows,s.cold_rows,s.plan_discards,s.budget_skipped,s.backoff_skipped,(unsigned long long)s.bytes,(unsigned long long)s.requests,(unsigned long long)s.fresh_calls,(unsigned long long)s.elapsed_ms);
+        plat_log("Native cached joints: demanded_rows=%u attempts=%u accepted_rows=%u warmups=%u warm_rows=%u cold_rows=%u plan_discards=%u budget_skips=%u backoff_skips=%u requested_host_bytes=%llu requests=%llu fresh_batches=%llu elapsed_ms=%llu first_failure=%s; native_age=unknown",s.demanded,s.attempted,s.accepted,s.warmups,s.warm_rows,s.cold_rows,s.plan_discards,s.budget_skipped,s.backoff_skipped,(unsigned long long)s.bytes,(unsigned long long)s.requests,(unsigned long long)s.fresh_calls,(unsigned long long)s.elapsed_ms,native_joint_backend::failure_text(s.first_failure));
     }
 }
 
 Frame Client::poll(int scoreboard_key){
+    Settings::ReadScope reader_settings(cfg,true);
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Frame f;f.game_id=games::DEADLOCK.cfg_prefix;f.game_revision=L::revision;f.world_units_per_metre=world_units::per_metre;f.actions_supported=true;f.time=now_ms();f.native_binding_epoch=mem.attachment_epoch();if(!binding_.client){f.status="No matching game layout";return f;}f.attached=true;
     frame_cache_.clear();performance_={};cache_active_=true;local_base_=0;helper_details_={};bool frame_acquired=false;
@@ -13292,11 +13296,11 @@ inline bool clear_path(const prediction::Shot& shot,const prediction::Solution& 
     int steps=std::clamp((int)std::ceil(solution.flight/.01f),1,128);Vec3 before=solution.launch;
     for(int i=1;i<=steps;i++){auto next=shot.kind==prediction::Kind::Beam?solution.point:prediction::position(solution,solution.flight*i/steps,shot.gravity);auto hit=collision::trace(before,next,collision::Bullet);if(!hit.known||!hit.clear)return false;before=next;}return true;
 }
-inline Result point(const prediction::Shot& shot,const Entity& target,int bone,u64 width,u64 height){
+inline Result point(const prediction::Shot& shot,const Entity& target,int bone,u64 width,u64 height,bool visibility_check=true){
     Result result;result.reason=shot.reason;if(!shot.valid||bone<0||bone>=aim_model::bone_count||shot.kind==prediction::Kind::UnitTarget)return result;
     Vec3 region;if(!aim_model::region_world(target,bone,region)){result.reason=snap.backend_managed?"Native target joint unavailable":"Target bounds unavailable"; // ACE_NATIVE_JOINT_INTEGRATION_V1
     return result;}result.solution=calculate(shot,region,target.vel,snap.backend_managed?target.native_joints.started_ms:0);if(!result.solution.valid){result.reason="No reachable projectile intercept";return result;}
-    if(!clear_path(shot,result.solution)){result.reason="Projectile path blocked or collision unavailable";return result;}
+    if(visibility_check&&!clear_path(shot,result.solution)){result.reason="Projectile path blocked or collision unavailable";return result;}
     result.screen=world_to_screen(result.solution.point,width,height);result.valid=aim_model::on_screen(result.screen,(float)width,(float)height);if(!result.valid)result.reason="Predicted aim point is outside the screen";return result;
 }
 }
@@ -15518,7 +15522,11 @@ public:
         return executed;
     }
 };
-struct Stats{u64 bytes=0,requests=0,elapsed_ms=0,fresh_calls=0;unsigned demanded=0,attempted=0,accepted=0,warmups=0,budget_skipped=0,backoff_skipped=0,warm_rows=0,cold_rows=0,plan_discards=0;};
+inline const char* failure_text(native_joints::Failure failure){
+    static constexpr const char* names[]={"none","no demand","unsupported demand","independent-read contract unavailable","not bound","game version guard mismatch","binding changed","invalid address","read failed","acquisition budget exceeded","identity mismatch","invalid scene","invalid model","invalid count","invalid name","joint name missing","joint name ambiguous","joint not in hitbox set","pose cache locked","pose cache not ready","metadata changed","pose changed during acquisition","non-finite transform"};
+    const auto index=static_cast<unsigned>(failure);return index<std::size(names)?names[index]:"unknown failure";
+}
+struct Stats{native_joints::Failure first_failure=native_joints::Failure::None;u64 bytes=0,requests=0,elapsed_ms=0,fresh_calls=0;unsigned demanded=0,attempted=0,accepted=0,warmups=0,budget_skipped=0,backoff_skipped=0,warm_rows=0,cold_rows=0,plan_discards=0;};
 class BudgetSource final:public native_joints::FreshSource{
     native_joints::FreshSource& source_;u64 remaining_bytes_=0,remaining_requests_=0;bool exhausted_=false;
 public:
@@ -15634,8 +15642,8 @@ public:
         if(selection_turn_==std::numeric_limits<u64>::max()){reset();epoch_=epoch;}++selection_turn_;
         std::unordered_set<u32> current;for(const auto& w:work){current.insert(w.target.expected_handle);if(w.entity&&w.demand)++source_.stats.demanded;}for(auto i=entries_.begin();i!=entries_.end();)if(!current.count(i->second.handle))i=entries_.erase(i);else ++i;
         auto finish=[&](){source_.stats.elapsed_ms=now_ms()-started;return source_.stats;};
-        if(!source_.stats.demanded||!epoch||source_.binding_epoch()!=epoch||work.empty())return finish();if(version_rejected_)return finish();
-        if(!verified_){if(now_ms()<verify_retry_){source_.stats.backoff_skipped=source_.stats.demanded;return finish();}if(!verifier_.bind(module)){version_rejected_=verifier_.last_failure()==Failure::WrongVersion;verify_retry_=now_ms()+250;return finish();}verified_=true;}
+        if(!source_.stats.demanded||!epoch||source_.binding_epoch()!=epoch||work.empty())return finish();if(version_rejected_){source_.stats.first_failure=Failure::WrongVersion;return finish();}
+        if(!verified_){if(now_ms()<verify_retry_){source_.stats.backoff_skipped=source_.stats.demanded;return finish();}if(!verifier_.bind(module)){source_.stats.first_failure=verifier_.last_failure();version_rejected_=verifier_.last_failure()==Failure::WrongVersion;verify_retry_=now_ms()+250;return finish();}verified_=true;}
         std::vector<Actor> actors;actors.reserve(128);std::unordered_set<u32> admitted;const auto count=work.size(),begin=cursor_%count;
         for(size_t n=0;n<count;++n){auto& w=work[(begin+n)%count];if(!w.entity||!w.demand)continue;if(w.demand!=native_joints::head&&w.demand!=native_joints::neck)continue;
             const u64 key=(u64(w.target.expected_handle)<<2)|w.demand;
@@ -15656,7 +15664,7 @@ public:
         const bool same_epoch=source_.binding_epoch()==epoch;const auto completed=now_ms();
         for(auto& a:actors){auto& e=*a.entry;if(!same_epoch)fail(a,Failure::BindingChanged);if(live(a)&&!wire::same_snapshot(a.a,a.b))fail(a,wire::key(a.a)==wire::key(a.b)?Failure::Inconsistent:Failure::MetadataChanged);
             if(live(a))for(unsigned j=0;j<2;++j)if(a.work->demand&(1u<<j)){const auto& x=a.first[j];const auto& y=a.second[j];if(x.name!=y.name||x.flags!=y.flags||x.name_string!=y.name_string){fail(a,Failure::MetadataChanged);break;}if(x.bitmap_word!=y.bitmap_word||std::memcmp(&x.pose,&y.pose,sizeof(x.pose))){fail(a,Failure::Inconsistent);break;}}
-            if(!live(a)){if(wire::invalidates_metadata(a.failure)){e.metadata=false;e.plan.reset();}if(negative_metadata(a.failure)){e.failures=std::min(e.failures+1,5u);e.next_retry=completed+std::min<u64>(5000,250ULL<<(e.failures-1));}continue;}
+            if(!live(a)){if(source_.stats.first_failure==Failure::None)source_.stats.first_failure=a.failure;if(wire::invalidates_metadata(a.failure)){e.metadata=false;e.plan.reset();}if(negative_metadata(a.failure)){e.failures=std::min(e.failures+1,5u);e.next_retry=completed+std::min<u64>(5000,250ULL<<(e.failures-1));}continue;}
             const unsigned selected_index=a.work->demand==native_joints::head?0:1;
             if(!a.warm){native_joint_quarantine::Plan plan;plan.target=a.work->target;plan.module=module;plan.epoch=epoch;plan.expected=native_joint_quarantine::dependencies(a.a);plan.selected=e.descriptors[selected_index];e.plan=std::move(plan);a.completed_ms=completed;}
             e.failures=0;e.next_retry=0;auto& out=a.work->entity->native_joints;out.binding_epoch=epoch;out.started_ms=out.valid_mask?std::min(out.started_ms,a.started_ms):a.started_ms;out.completed_ms=std::max(out.completed_ms,a.completed_ms);
@@ -16033,12 +16041,14 @@ constexpr bool any_visible(const Styles& styles){for(const auto& style:styles)if
 // Preserve an imported active custom style before its checkbox can be switched
 // off on the first displayed frame. Appearance is never reseeded here.
 inline void prepare_edit(Settings& settings,std::size_t category) {
+    Settings::WriteScope settings_edit(settings);
     const auto& p=keys(category);
     if(settings.B(p.custom.c_str())&&!settings.B(p.initialized.c_str())){
-        settings.find(p.initialized.c_str())->b=true;settings.dirty=true;
+        settings.find(p.initialized.c_str())->b=true;settings.mark_dirty();
     }
 }
 inline void register_all(Settings& settings) {
+    Settings::WriteScope settings_edit(settings);
     for(std::size_t i=0;i<world_style_catalog::count;++i){const auto& p=keys(i);
         settings.defb(p.enabled.c_str(),"Show this category",true);settings.defb(p.custom.c_str(),"Custom style",true);
         settings.defb(p.initialized.c_str(),"World style initialized",false); // Internal first-edit state; never exposed/searchable.
@@ -16050,11 +16060,12 @@ inline void register_all(Settings& settings) {
 }
 // Copy only appearance. The category master is never changed by style reset.
 inline void copy_shared(Settings& settings,std::size_t category) {
+    Settings::WriteScope settings_edit(settings);
     const auto value=shared(settings);const auto& p=keys(category);
     settings.find(p.label.c_str())->b=value.label;settings.find(p.icon.c_str())->b=value.icon;
     settings.find(p.distance.c_str())->b=value.distance;settings.find(p.color.c_str())->c=value.color;
     settings.find(p.icon_size.c_str())->f=value.icon_size;settings.find(p.text_size.c_str())->f=value.text_size;
-    settings.find(p.draw_distance.c_str())->i=value.draw_distance;settings.find(p.initialized.c_str())->b=true;settings.dirty=true;
+    settings.find(p.draw_distance.c_str())->i=value.draw_distance;settings.find(p.initialized.c_str())->b=true;settings.mark_dirty();
 }
 }
 :::ENDFILE
@@ -16217,10 +16228,10 @@ constexpr Point origin(float x,float y,const Size& menu,float host_width,float h
     return {clamp(x,menu.pad_x,maximum(menu.pad_x,host_width-menu.pad_x-menu.width)),clamp(y,menu.pad_y,maximum(menu.pad_y,host_height-menu.pad_y-menu.height))};
 }
 struct Cell {float x=0,y=0,width=0;};
-struct Tabs {std::vector<Cell> cells;float height=0;};
+struct Tabs {std::vector<Cell> cells;float height=0,row_height=32;};
 inline constexpr float tab_height=32,tab_gap=4;
-constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available){
-    Tabs result;if(minimum_widths.empty())return result;available=maximum(1,available);
+constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available,float minimum_height=tab_height){
+    Tabs result;result.row_height=maximum(tab_height,minimum_height);if(minimum_widths.empty())return result;available=maximum(1,available);
     std::size_t start=0;float y=0;
     while(start<minimum_widths.size()){
         std::size_t end=start;float used=0;
@@ -16231,7 +16242,7 @@ constexpr Tabs tabs(const std::vector<float>& minimum_widths,float available){
         }
         const float extra=maximum(0,(available-used)/static_cast<float>(end-start));float x=0;
         for(auto i=start;i<end;++i){const float width=minimum(available,maximum(1,minimum_widths[i]))+extra;result.cells.push_back({x,y,width});x+=width;}
-        start=end;y+=tab_height+tab_gap;
+        start=end;y+=result.row_height+tab_gap;
     }
     result.height=y-tab_gap;return result;
 }

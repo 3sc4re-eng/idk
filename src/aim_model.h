@@ -19,13 +19,13 @@ inline bool region_world(const Entity& e,int index,Vec3& point){
     if(snap.backend_managed||index<0||index>=bone_count)return false;
     point=e.pos+Vec3{0,0,heights[index]};return true; // Isolated settings/test fixtures only.
 }
-// Existing bounds-region admission flags remain independently required.
-// They do not prove clearance to this separately sampled native joint.
-inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f){
-    Point best;if(!e.visible||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return best;
+// Clearance is recorded at the same sampled native joint used for selection.
+// Diagnostic bypass never creates absent joint coordinates.
+inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f,bool require_visibility=true){
+    Point best;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return best;
     Vec2 crosshair{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&(!e.occlusion_valid||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-crosshair).len();if(distance>limit)continue;
         if(priority>best.priority||(priority==best.priority&&distance<best.distance))best={p,i,priority,distance};
@@ -34,12 +34,12 @@ inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f){
 inline float projection_x(){if(!snap.backend_managed)return 1;std::lock_guard<std::mutex> lock(snap_mtx);return std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);}
 inline unsigned bone_stamp(){unsigned v=2166136261u;for(int i=0;i<bone_count;i++)v=(v^(unsigned)(cfg.I(key(i).c_str())+2))*16777619u;return v;}
 inline float acquisition_roll(u64 entity,unsigned session){u64 v=entity^(u64(session)<<32);v^=v>>33;v*=0xff51afd7ed558ccdULL;v^=v>>33;return (v&0xffffff)/16777216.f;}
-inline Point weighted_select(const Entity& e,u64 w,u64 h,float roll,float limit=1e30f,int preferred=-1){
-    Point none;if(!e.visible||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return none;
+inline Point weighted_select(const Entity& e,u64 w,u64 h,float roll,float limit=1e30f,int preferred=-1,bool require_visibility=true){
+    Point none;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return none;
     std::array<Point,bone_count> points{};std::array<float,bone_count> weights{};float total=0;
     Vec2 center{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&(!e.occlusion_valid||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-center).len();if(distance>limit)continue;
         points[i]={p,i,priority,distance};

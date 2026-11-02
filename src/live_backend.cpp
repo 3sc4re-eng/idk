@@ -373,7 +373,7 @@ void Client::sample_native_joints(Frame& f){
         const auto distance=f.local.pos.dist(e.pos);
         if(player&&e.valid&&std::isfinite(distance)){
             {Settings::VisualScope side(e.team==f.local.team);
-                requested|=native_joint_demand::visual_head(cfg.B("visuals.enabled")&&cfg.B("cls.players")&&cfg.B("esp.enabled")&&cfg.B("esp.head_circle"),
+                requested|=native_joint_demand::visual_head(cfg.B("visuals.enabled")&&cfg.B("cls.players")&&cfg.B("esp.enabled"),
                     player,e.valid,world_units::units((float)cfg.I("esp.draw_distance")),distance);}
             if(e.alive&&e.modifiers_valid&&!e.stealthed&&!e.invuln&&!e.bullet_invuln&&
                (!cfg.B("target.team_check")||e.team!=f.local.team))requested|=native_joint_demand::at_distance(actions,distance);
@@ -390,11 +390,12 @@ void Client::sample_native_joints(Frame& f){
     f.native_joint_performance=native_joint_bank_->sample(binding_.client,f.native_binding_epoch,work);
     const auto now=now_ms();if(f.native_joint_performance.demanded&&now-native_joint_log_>=5000){native_joint_log_=now;
         const auto& s=f.native_joint_performance;
-        plat_log("Native cached joints: demanded_rows=%u attempts=%u accepted_rows=%u warmups=%u warm_rows=%u cold_rows=%u plan_discards=%u budget_skips=%u backoff_skips=%u requested_host_bytes=%llu requests=%llu fresh_batches=%llu elapsed_ms=%llu; native_age=unknown",s.demanded,s.attempted,s.accepted,s.warmups,s.warm_rows,s.cold_rows,s.plan_discards,s.budget_skipped,s.backoff_skipped,(unsigned long long)s.bytes,(unsigned long long)s.requests,(unsigned long long)s.fresh_calls,(unsigned long long)s.elapsed_ms);
+        plat_log("Native cached joints: demanded_rows=%u attempts=%u accepted_rows=%u warmups=%u warm_rows=%u cold_rows=%u plan_discards=%u budget_skips=%u backoff_skips=%u requested_host_bytes=%llu requests=%llu fresh_batches=%llu elapsed_ms=%llu first_failure=%s; native_age=unknown",s.demanded,s.attempted,s.accepted,s.warmups,s.warm_rows,s.cold_rows,s.plan_discards,s.budget_skipped,s.backoff_skipped,(unsigned long long)s.bytes,(unsigned long long)s.requests,(unsigned long long)s.fresh_calls,(unsigned long long)s.elapsed_ms,native_joint_backend::failure_text(s.first_failure));
     }
 }
 
 Frame Client::poll(int scoreboard_key){
+    Settings::ReadScope reader_settings(cfg,true);
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Frame f;f.game_id=games::DEADLOCK.cfg_prefix;f.game_revision=L::revision;f.world_units_per_metre=world_units::per_metre;f.actions_supported=true;f.time=now_ms();f.native_binding_epoch=mem.attachment_epoch();if(!binding_.client){f.status="No matching game layout";return f;}f.attached=true;
     frame_cache_.clear();performance_={};cache_active_=true;local_base_=0;helper_details_={};bool frame_acquired=false;

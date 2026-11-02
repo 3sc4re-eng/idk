@@ -25,7 +25,11 @@ public:
         return executed;
     }
 };
-struct Stats{u64 bytes=0,requests=0,elapsed_ms=0,fresh_calls=0;unsigned demanded=0,attempted=0,accepted=0,warmups=0,budget_skipped=0,backoff_skipped=0,warm_rows=0,cold_rows=0,plan_discards=0;};
+inline const char* failure_text(native_joints::Failure failure){
+    static constexpr const char* names[]={"none","no demand","unsupported demand","independent-read contract unavailable","not bound","game version guard mismatch","binding changed","invalid address","read failed","acquisition budget exceeded","identity mismatch","invalid scene","invalid model","invalid count","invalid name","joint name missing","joint name ambiguous","joint not in hitbox set","pose cache locked","pose cache not ready","metadata changed","pose changed during acquisition","non-finite transform"};
+    const auto index=static_cast<unsigned>(failure);return index<std::size(names)?names[index]:"unknown failure";
+}
+struct Stats{native_joints::Failure first_failure=native_joints::Failure::None;u64 bytes=0,requests=0,elapsed_ms=0,fresh_calls=0;unsigned demanded=0,attempted=0,accepted=0,warmups=0,budget_skipped=0,backoff_skipped=0,warm_rows=0,cold_rows=0,plan_discards=0;};
 class BudgetSource final:public native_joints::FreshSource{
     native_joints::FreshSource& source_;u64 remaining_bytes_=0,remaining_requests_=0;bool exhausted_=false;
 public:
@@ -141,8 +145,8 @@ public:
         if(selection_turn_==std::numeric_limits<u64>::max()){reset();epoch_=epoch;}++selection_turn_;
         std::unordered_set<u32> current;for(const auto& w:work){current.insert(w.target.expected_handle);if(w.entity&&w.demand)++source_.stats.demanded;}for(auto i=entries_.begin();i!=entries_.end();)if(!current.count(i->second.handle))i=entries_.erase(i);else ++i;
         auto finish=[&](){source_.stats.elapsed_ms=now_ms()-started;return source_.stats;};
-        if(!source_.stats.demanded||!epoch||source_.binding_epoch()!=epoch||work.empty())return finish();if(version_rejected_)return finish();
-        if(!verified_){if(now_ms()<verify_retry_){source_.stats.backoff_skipped=source_.stats.demanded;return finish();}if(!verifier_.bind(module)){version_rejected_=verifier_.last_failure()==Failure::WrongVersion;verify_retry_=now_ms()+250;return finish();}verified_=true;}
+        if(!source_.stats.demanded||!epoch||source_.binding_epoch()!=epoch||work.empty())return finish();if(version_rejected_){source_.stats.first_failure=Failure::WrongVersion;return finish();}
+        if(!verified_){if(now_ms()<verify_retry_){source_.stats.backoff_skipped=source_.stats.demanded;return finish();}if(!verifier_.bind(module)){source_.stats.first_failure=verifier_.last_failure();version_rejected_=verifier_.last_failure()==Failure::WrongVersion;verify_retry_=now_ms()+250;return finish();}verified_=true;}
         std::vector<Actor> actors;actors.reserve(128);std::unordered_set<u32> admitted;const auto count=work.size(),begin=cursor_%count;
         for(size_t n=0;n<count;++n){auto& w=work[(begin+n)%count];if(!w.entity||!w.demand)continue;if(w.demand!=native_joints::head&&w.demand!=native_joints::neck)continue;
             const u64 key=(u64(w.target.expected_handle)<<2)|w.demand;
@@ -163,7 +167,7 @@ public:
         const bool same_epoch=source_.binding_epoch()==epoch;const auto completed=now_ms();
         for(auto& a:actors){auto& e=*a.entry;if(!same_epoch)fail(a,Failure::BindingChanged);if(live(a)&&!wire::same_snapshot(a.a,a.b))fail(a,wire::key(a.a)==wire::key(a.b)?Failure::Inconsistent:Failure::MetadataChanged);
             if(live(a))for(unsigned j=0;j<2;++j)if(a.work->demand&(1u<<j)){const auto& x=a.first[j];const auto& y=a.second[j];if(x.name!=y.name||x.flags!=y.flags||x.name_string!=y.name_string){fail(a,Failure::MetadataChanged);break;}if(x.bitmap_word!=y.bitmap_word||std::memcmp(&x.pose,&y.pose,sizeof(x.pose))){fail(a,Failure::Inconsistent);break;}}
-            if(!live(a)){if(wire::invalidates_metadata(a.failure)){e.metadata=false;e.plan.reset();}if(negative_metadata(a.failure)){e.failures=std::min(e.failures+1,5u);e.next_retry=completed+std::min<u64>(5000,250ULL<<(e.failures-1));}continue;}
+            if(!live(a)){if(source_.stats.first_failure==Failure::None)source_.stats.first_failure=a.failure;if(wire::invalidates_metadata(a.failure)){e.metadata=false;e.plan.reset();}if(negative_metadata(a.failure)){e.failures=std::min(e.failures+1,5u);e.next_retry=completed+std::min<u64>(5000,250ULL<<(e.failures-1));}continue;}
             const unsigned selected_index=a.work->demand==native_joints::head?0:1;
             if(!a.warm){native_joint_quarantine::Plan plan;plan.target=a.work->target;plan.module=module;plan.epoch=epoch;plan.expected=native_joint_quarantine::dependencies(a.a);plan.selected=e.descriptors[selected_index];e.plan=std::move(plan);a.completed_ms=completed;}
             e.failures=0;e.next_retry=0;auto& out=a.work->entity->native_joints;out.binding_epoch=epoch;out.started_ms=out.valid_mask?std::min(out.started_ms,a.started_ms):a.started_ms;out.completed_ms=std::max(out.completed_ms,a.completed_ms);
