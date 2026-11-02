@@ -1,0 +1,68 @@
+0x25e100 push rsi
+0x25e102 push rdi
+0x25e103 sub rsp, 0x48
+0x25e107 cmp byte ptr [rcx + 0x185c], 0
+0x25e10e mov rsi, rdx
+0x25e111 mov rdi, rcx
+0x25e114 je 0x18025e23f
+0x25e11a cmp byte ptr [rcx + 0x1868], 0
+0x25e121 je 0x18025e23f
+0x25e127 mov qword ptr [rsp + 0x40], rbx
+0x25e12c lea rdx, [rcx + 0x1870]
+0x25e133 movaps xmmword ptr [rsp + 0x30], xmm6
+0x25e138 movss xmm6, dword ptr [rcx + 0x1878]
+0x25e140 lea rcx, [rsp + 0x60]
+0x25e145 movaps xmm2, xmm6
+0x25e148 movaps xmmword ptr [rsp + 0x20], xmm7
+0x25e14d call 0x18024abd0
+0x25e152 lea rcx, [rdi + 0x1874]
+0x25e159 mov rdx, rax
+0x25e15c call 0x18024abc0
+0x25e161 mov rax, qword ptr [rdi + 0x390]
+0x25e168 lea rdx, [rdi + 0x1870]
+0x25e16f movaps xmm7, xmm0
+0x25e172 lea rcx, [rsp + 0x60]
+0x25e177 movaps xmm2, xmm6
+0x25e17a mulss xmm7, dword ptr [rax + 0x10e8]
+0x25e182 call 0x18024abd0
+0x25e187 lea rdx, [rdi + 0x1870]
+0x25e18e lea rcx, [rsp + 0x60]
+0x25e193 movss xmm0, dword ptr [rax]
+0x25e197 movss dword ptr [rsi], xmm0
+0x25e19b mov rax, qword ptr [rdi + 0x390]
+0x25e1a2 movss xmm2, dword ptr [rdi + 0x1878]
+0x25e1aa movss xmm6, dword ptr [rax + 0x10ec]
+0x25e1b2 mulss xmm6, dword ptr [rip + 0x240e412]
+0x25e1ba call 0x18024abd0
+0x25e1bf mov rdx, rax
+0x25e1c2 lea rcx, [rsp + 0x70]
+0x25e1c7 movaps xmm2, xmm7
+0x25e1ca call 0x18024abd0
+0x25e1cf movaps xmm2, xmm6
+0x25e1d2 lea rcx, [rsp + 0x78]
+0x25e1d7 mov rdx, rax
+0x25e1da call 0x18024abb0
+0x25e1df lea rdx, [rsi + 4]
+0x25e1e3 lea rcx, [rsp + 0x60]
+0x25e1e8 movss xmm0, dword ptr [rax]
+0x25e1ec movss dword ptr [rdx], xmm0
+0x25e1f0 mov rax, qword ptr [rdi + 0x390]
+0x25e1f7 movss xmm2, dword ptr [rax + 0x10ec]
+0x25e1ff call 0x18024abd0
+0x25e204 mov rcx, rdi
+0x25e207 movss xmm0, dword ptr [rax]
+0x25e20b movss dword ptr [rsi + 8], xmm0
+0x25e210 call 0x1804bf520
+0x25e215 mov edx, 0xb1
+0x25e21a mov rcx, rax
+0x25e21d call 0x180a8d810
+0x25e222 movaps xmm7, xmmword ptr [rsp + 0x20]
+0x25e227 xor al, 1
+0x25e229 movaps xmm6, xmmword ptr [rsp + 0x30]
+0x25e22e mov rbx, qword ptr [rsp + 0x40]
+0x25e233 mov byte ptr [rsi + 0xc], al
+0x25e236 mov al, 1
+0x25e238 add rsp, 0x48
+0x25e23c pop rdi
+0x25e23d pop rsi
+0x25e23e ret 

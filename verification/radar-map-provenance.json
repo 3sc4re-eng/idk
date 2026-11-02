@@ -1,0 +1,25 @@
+{
+  "scope": "2D minimap texture and image coordinate metadata only; no collision geometry or map/BVH parsing",
+  "installed_client_version": 6839,
+  "installed_source_revision": 11193905,
+  "texture": "panorama/images/minimap/base/minimap_midtown_mid_psd.vtex_c",
+  "texture_crc32": "5a031525",
+  "png_sha256": "b98847d1b35bf6775a00f97e33bd11e7510f03bbdb1ebf2e4ab5ee50b252a932",
+  "png_bytes": 306273,
+  "dimensions": [
+    1024,
+    1024
+  ],
+  "source_metadata_url": "https://github.com/deadlock-api/deadlock-api/blob/master/crates/game-assets/src/versions/map/mod.rs",
+  "source_snapshot_url": "https://github.com/deadlock-api/deadlock-api/blob/master/crates/game-assets/src/versions/map/map_snapshots/map_city_never_sleeps.snap",
+  "source_image_family_min_client_version": 6711,
+  "source_radius": 10752,
+  "source_transform": "u=(x+10752)/21504; v=(10752-y)/21504",
+  "live_alignment_tested": false,
+  "missing_images": [
+    "dl_hideout",
+    "hero_testing"
+  ],
+  "application_executed": false,
+  "radar_started": false
+}

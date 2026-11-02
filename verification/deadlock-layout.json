@@ -1,0 +1,55 @@
+{
+  "revision": 11193905,
+  "schema_url": "https://s2v.app/SchemaExplorer/assets/deadlock.json-DdBOyIt5.gz",
+  "client_sha256": "929a0455e510ad8bb76c26737a9c84a58ed496267b89b243f94b0699bb10855a",
+  "client_timestamp": 1793470523,
+  "image_size": 71352320,
+  "globals": [
+    {
+      "name": "entities",
+      "instructions": [
+        25193611
+      ],
+      "target_rva": 67009680,
+      "pattern": "48 8B 1D ? ? ? ? 48 89 1D ? ? ? ? 4C 63 B3"
+    },
+    {
+      "name": "view",
+      "instructions": [
+        27282515
+      ],
+      "target_rva": 65739488,
+      "pattern": "48 8D 0D ? ? ? ? 48 C1 E0 06"
+    },
+    {
+      "name": "rules",
+      "instructions": [
+        26824779,
+        26825227
+      ],
+      "target_rva": 65702848,
+      "pattern": "48 89 1D ? ? ? ? FF 15 ? ? ? ? 84 C0"
+    }
+  ],
+  "known_classes": 780,
+  "native_clock": {
+    "instruction_rva": "0x4c81a8",
+    "global_pointer_rva": "0x346e730",
+    "current_time_offset": "0x30",
+    "frame_counter_offset": "0x4",
+    "validation": "PE build match, RIP target match, finite clock and advancing frame counter"
+  },
+  "active_reload": {
+    "native_window_function_rva": "0x25e100",
+    "weapon_reload_flag": "0x185c",
+    "weapon_available_flag": "0x1868",
+    "begin": "0x1870",
+    "end": "0x1874",
+    "accumulated_pause": "0x1878",
+    "vdata_pointer": "0x390",
+    "timing_fraction": "0x10e8",
+    "timing_duration": "0x10ec",
+    "definition": "effective_begin=begin+pause; centre=effective_begin+(end-effective_begin)*fraction; green_window=centre +/- duration/2",
+    "hardware_verified": false
+  }
+}

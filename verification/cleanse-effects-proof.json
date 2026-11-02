@@ -1,0 +1,1479 @@
+{
+  "source": "C:\\Users\\kieran\\Documents\\Codex\\2026-10-31\\referenced-chatgpt-conversation-this-is-an\\work\\backend\\current-abilities.vdata",
+  "source_sha256": "ff0cf536fb42bc0a736a336db3e7e6424f53570f65efcad42574afd5f172f556",
+  "scope": "Only explicit negative generic modifier data, without non-purgeable/permanent/duration-locked flags. Custom unknown modifier classes excluded. Runtime applied-removable effect check remains mandatory.",
+  "entries": [
+    {
+      "key": "citadel_ability_bull_charge",
+      "title": "Shoulder Charge",
+      "hero": 6,
+      "slot": 1,
+      "item": false,
+      "token": 2824119765,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_fencer_throwblade",
+      "title": "Disengaging Sigil",
+      "hero": 77,
+      "slot": 0,
+      "item": false,
+      "token": 725153709,
+      "projectile": false,
+      "speed": 0,
+      "radius": 255.90551180999998,
+      "cast": 0.5,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        },
+        {
+          "path": "/m_DisarmModifier",
+          "class": "modifier_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_DISARMED",
+          "effects": [
+            "disarm"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_baba_bench_run",
+      "title": "Granny Long Legs",
+      "hero": 88,
+      "slot": 1,
+      "item": false,
+      "token": 3122124161,
+      "projectile": false,
+      "speed": 0,
+      "radius": 314.96062992,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_BenchRunModifier/m_HeavyKickSlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_hook",
+      "title": "Grapple Arm",
+      "hero": 15,
+      "slot": 2,
+      "item": false,
+      "token": 1928108461,
+      "projectile": true,
+      "speed": 2850.0,
+      "radius": 0.0,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 33.0,
+      "evidence": [
+        {
+          "path": "/m_TargetModifier/m_RestrictionModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SILENCE_MOVEMENT_ABILITES | MODIFIER_STATE_MOVEMENT_ABILITY_ACTIVATION_RESTRICTED | MODIFIER_STATE_MOVEMENT_INPUT_DISABLED | MODIFIER_STATE_DASH_DISABLED | MODIFIER_STATE_AIR_JUMPS_DISABLED | MODIFIER_STATE_SLOWED",
+          "effects": [
+            "movement lock",
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_bebop_laser_beam",
+      "title": "Hyper Beam",
+      "hero": 15,
+      "slot": 3,
+      "item": false,
+      "token": 3832675871,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 1.0,
+      "channel": 11.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_RestrictionModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_unicorn_prismaticguard",
+      "title": "Dazzling Trick",
+      "hero": 81,
+      "slot": 1,
+      "item": false,
+      "token": 1950738949,
+      "projectile": true,
+      "speed": 500.0,
+      "radius": 551.18110236,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SILENCED",
+          "effects": [
+            "silence"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_unicorn_dazzlingorb",
+      "title": "Shining Wonder",
+      "hero": 81,
+      "slot": 3,
+      "item": false,
+      "token": 2590796390,
+      "projectile": false,
+      "speed": 0.0,
+      "radius": 0.0,
+      "cast": 0.75,
+      "channel": 9999.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 40.0,
+      "evidence": [
+        {
+          "path": "/m_OrbWatcherModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SLOWED",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_deadpack_flamethrower",
+      "title": "Jettison Fuel",
+      "hero": 78,
+      "slot": 2,
+      "item": false,
+      "token": 374042410,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_stomp",
+      "title": "Kinetic Pulse",
+      "hero": 11,
+      "slot": 0,
+      "item": false,
+      "token": 3760705623,
+      "projectile": true,
+      "speed": 1600.0,
+      "radius": 0.0,
+      "cast": 0.42,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 1.0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_necro_hauntingskull",
+      "title": "Jar of Dead",
+      "hero": 76,
+      "slot": 0,
+      "item": false,
+      "token": 3214055642,
+      "projectile": true,
+      "speed": 900.0,
+      "radius": 0.0,
+      "cast": 0.15,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 4,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 1.5,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_necro_gravestone",
+      "title": "Borrowed Decree",
+      "hero": 76,
+      "slot": 3,
+      "item": false,
+      "token": 4110547059,
+      "projectile": true,
+      "speed": 1700.0,
+      "radius": 255.90551180999998,
+      "cast": 0.0,
+      "channel": 0.66,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_ZombieSummonModifier/m_SpawningInModifier",
+          "class": "modifier_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_IMMOBILIZED | MODIFIER_STATE_COMMAND_RESTRICTED | MODIFIER_STATE_UNIT_STATUS_HEALTH_HIDDEN | MODIFIER_STATE_UNIT_STATUS_HIDDEN | MODIFIER_STATE_DO_NOT_DRAW_MODEL",
+          "effects": [
+            "root"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_power_jump",
+      "title": "Rain of Arrows",
+      "hero": 17,
+      "slot": 1,
+      "item": false,
+      "token": 3452399392,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_InAirModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_sleep_dagger",
+      "title": "Sleep Dagger",
+      "hero": 13,
+      "slot": 0,
+      "item": false,
+      "token": 2948410412,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_SleepModifier/m_PostSleepModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_incendiary_projectile",
+      "title": "Napalm",
+      "hero": 1,
+      "slot": 0,
+      "item": false,
+      "token": 491391007,
+      "projectile": true,
+      "speed": 3500.0,
+      "radius": 0.0,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_fire_bomb",
+      "title": "Concussive Combustion",
+      "hero": 1,
+      "slot": 3,
+      "item": false,
+      "token": 1142270357,
+      "projectile": false,
+      "speed": 0,
+      "radius": 472.44094487999996,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_lash_down_strike",
+      "title": "Ground Strike",
+      "hero": 31,
+      "slot": 0,
+      "item": false,
+      "token": 3561817145,
+      "projectile": false,
+      "speed": 0,
+      "radius": 393.70078739999997,
+      "cast": 0.15,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_ImpactModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_lash_ultimate",
+      "title": "Death Slam",
+      "hero": 31,
+      "slot": 3,
+      "item": false,
+      "token": 397010810,
+      "projectile": false,
+      "speed": 0,
+      "radius": 236.22047243999998,
+      "cast": 0.3,
+      "channel": 2.3,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_GrappleEnemyModifier/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_shieldedsentry",
+      "title": "Mini Turret",
+      "hero": 8,
+      "slot": 0,
+      "item": false,
+      "token": 3133377790,
+      "projectile": true,
+      "speed": 600.0,
+      "radius": 0.0,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_fissure_wall",
+      "title": "Spectral Wall",
+      "hero": 8,
+      "slot": 2,
+      "item": false,
+      "token": 1725685134,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_WallModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        },
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_rocket_barrage",
+      "title": "Heavy Barrage",
+      "hero": 8,
+      "slot": 3,
+      "item": false,
+      "token": 3503044146,
+      "projectile": true,
+      "speed": 3500.0,
+      "radius": 177.16535432999999,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 3.0,
+      "evidence": [
+        {
+          "path": "/m_MoveSlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "mirage_tornado",
+      "title": "Dust Devil",
+      "hero": 52,
+      "slot": 1,
+      "item": false,
+      "token": 1336069669,
+      "projectile": false,
+      "speed": 0,
+      "radius": 157.48031496,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_TornadoAura/m_modifierProvidedByAura/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_burrow",
+      "title": "Burrow",
+      "hero": 18,
+      "slot": 1,
+      "item": false,
+      "token": 2406758797,
+      "projectile": false,
+      "speed": 0,
+      "radius": 196.85039369999998,
+      "cast": 1.0,
+      "channel": 5.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_SpinModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_nurse_fear",
+      "title": "Lurking Terrors",
+      "hero": 87,
+      "slot": 3,
+      "item": false,
+      "token": 3427093887,
+      "projectile": true,
+      "speed": 3500.0,
+      "radius": 0.0,
+      "cast": 1.3,
+      "channel": 7.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_ZIPLINE_DISABLED",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_bookworm_aoemagic",
+      "title": "Captivating Read",
+      "hero": 67,
+      "slot": 2,
+      "item": false,
+      "token": 3054993162,
+      "projectile": false,
+      "speed": 0,
+      "radius": 295.27559054999995,
+      "cast": 0.15,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_AreaModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "synth_barrage",
+      "title": "Barrage",
+      "hero": 50,
+      "slot": 0,
+      "item": false,
+      "token": 938149308,
+      "projectile": false,
+      "speed": 0.0,
+      "radius": 177.16535432999999,
+      "cast": 0.3,
+      "channel": 2.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_ratking_scrap_grenade",
+      "title": "Scrap Grenade",
+      "hero": 84,
+      "slot": 0,
+      "item": false,
+      "token": 3002308408,
+      "projectile": true,
+      "speed": 1300.0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 25.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        },
+        {
+          "path": "/m_BigExplosionSlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_lightning_ball",
+      "title": "Lightning Ball",
+      "hero": 2,
+      "slot": 0,
+      "item": false,
+      "token": 1065103387,
+      "projectile": true,
+      "speed": 1700.0,
+      "radius": 0.0,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_chessmaster_forkpiece",
+      "title": "Rook Battery",
+      "hero": 85,
+      "slot": 2,
+      "item": false,
+      "token": 2424652896,
+      "projectile": true,
+      "speed": 850.0,
+      "radius": 0.0,
+      "cast": 0.25,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 70.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_chessmaster_queen",
+      "title": "Develop Queen",
+      "hero": 85,
+      "slot": 3,
+      "item": false,
+      "token": 1389230689,
+      "projectile": true,
+      "speed": 1900.0,
+      "radius": 0.0,
+      "cast": 0.75,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 120.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_doorman_bomb",
+      "title": "Call Bell",
+      "hero": 69,
+      "slot": 0,
+      "item": false,
+      "token": 103496908,
+      "projectile": true,
+      "speed": 1500.0,
+      "radius": 216.53543306999998,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": true,
+      "projectile_radius": 30.0,
+      "evidence": [
+        {
+          "path": "/m_AuraModifier/m_modifierProvidedByAura",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_artist_tether",
+      "title": "Still Life",
+      "hero": 86,
+      "slot": 2,
+      "item": false,
+      "token": 3612874202,
+      "projectile": true,
+      "speed": 3500.0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 2.6,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 15.0,
+      "evidence": [
+        {
+          "path": "/m_BuildupModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "viscous_goo_grenade",
+      "title": "Splatter",
+      "hero": 35,
+      "slot": 0,
+      "item": false,
+      "token": 3247040238,
+      "projectile": true,
+      "speed": 1600.0,
+      "radius": 196.85039369999998,
+      "cast": 0.001,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 12.0,
+      "evidence": [
+        {
+          "path": "/m_GooGrenadePuddleAuraModifier/m_modifierProvidedByAura",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "viscous_telepunch",
+      "title": "Puddle Punch",
+      "hero": 35,
+      "slot": 2,
+      "item": false,
+      "token": 1020817390,
+      "projectile": false,
+      "speed": 0,
+      "radius": 157.48031496,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 1,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_ImpactModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ability_warden_crowd_control",
+      "title": "Alchemical Flask",
+      "hero": 25,
+      "slot": 0,
+      "item": false,
+      "token": 2656490109,
+      "projectile": true,
+      "speed": 980.0,
+      "radius": 216.53543306999998,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_card_toss",
+      "title": "Card Trick",
+      "hero": 7,
+      "slot": 0,
+      "item": false,
+      "token": 1999680326,
+      "projectile": true,
+      "speed": 1080.0,
+      "radius": 157.48031496,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 2,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 15.0,
+      "evidence": [
+        {
+          "path": "/m_ClubModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_psychic_lift",
+      "title": "Telekinesis",
+      "hero": 7,
+      "slot": 3,
+      "item": false,
+      "token": 2981692841,
+      "projectile": true,
+      "speed": 675.0,
+      "radius": 0.0,
+      "cast": 0.45,
+      "channel": 1.25,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 15.0,
+      "evidence": [
+        {
+          "path": "/m_LiftModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SLOWED | MODIFIER_STATE_DASH_DISABLED_DEBUFF | MODIFIER_STATE_SILENCE_MOVEMENT_ABILITES",
+          "effects": [
+            "movement lock",
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_power_slash",
+      "title": "Power Slash",
+      "hero": 27,
+      "slot": 0,
+      "item": false,
+      "token": 3255651252,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 1.4,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "citadel_ability_flying_strike",
+      "title": "Flying Slash",
+      "hero": 27,
+      "slot": 1,
+      "item": false,
+      "token": 2566573207,
+      "projectile": false,
+      "speed": 0.0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": false,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_containment",
+      "title": "Slowing Hex",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 1813726886,
+      "projectile": true,
+      "speed": 3149.61,
+      "radius": 0.0,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": false,
+      "projectile_radius": 15.0,
+      "evidence": [
+        {
+          "path": "/m_TargetModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SILENCE_MOVEMENT_ABILITES",
+          "effects": [
+            "movement lock",
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_greater_withering_whip",
+      "title": "Disarming Hex",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 2061878743,
+      "projectile": true,
+      "speed": 1560.0,
+      "radius": 0.0,
+      "cast": 0.1,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": false,
+      "projectile_radius": 15.0,
+      "evidence": [
+        {
+          "path": "/m_TargetModifier",
+          "class": "modifier_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_DISARMED",
+          "effects": [
+            "disarm"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_phantom_strike",
+      "title": "Phantom Strike",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 1371725689,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.35,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": false,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_DISARMED",
+          "effects": [
+            "disarm",
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_aoe_root",
+      "title": "Vortex Web",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 1152158042,
+      "projectile": true,
+      "speed": 2400.0,
+      "radius": 0.0,
+      "cast": 0.2,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": false,
+      "projectile_radius": 0.0,
+      "evidence": [
+        {
+          "path": "/m_TargetModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_SILENCE_MOVEMENT_ABILITES",
+          "effects": [
+            "movement lock",
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_rocket_booster",
+      "title": "Majestic Leap",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 600033864,
+      "projectile": false,
+      "speed": 0,
+      "radius": 0.0,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": false,
+      "single": true,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_DebuffModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_cold_front",
+      "title": "Cold Front",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 1976391348,
+      "projectile": false,
+      "speed": 0,
+      "radius": 393.70078739999997,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_AOEModifier/m_TargetModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "upgrade_arctic_blast",
+      "title": "Arctic Blast",
+      "hero": 0,
+      "slot": -1,
+      "item": true,
+      "token": 3812615317,
+      "projectile": false,
+      "speed": 0,
+      "radius": 629.92125984,
+      "cast": 0.0,
+      "channel": 0.0,
+      "aoe": true,
+      "single": false,
+      "enemy": true,
+      "passive": false,
+      "charges": 0,
+      "start_trained": true,
+      "self_centered": true,
+      "projectile_radius": 0,
+      "evidence": [
+        {
+          "path": "/m_AOEModifier/m_SlowModifier",
+          "class": "modifier_slow_base",
+          "attributes": "",
+          "states": "MODIFIER_STATE_STAMINA_REGEN_PAUSED",
+          "effects": [
+            "slow"
+          ]
+        }
+      ]
+    }
+  ]
+}

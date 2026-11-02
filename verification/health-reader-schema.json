@@ -1,0 +1,329 @@
+{
+  "revision": 11193905,
+  "generator": "https://github.com/ValveResourceFormat/DumpSource2",
+  "classes": [
+    {
+      "name": "CCitadelPlayerController",
+      "size": 3168,
+      "parents": [
+        {
+          "module": "client",
+          "name": "CBasePlayerController"
+        }
+      ],
+      "network": null,
+      "fields": [
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_PlayerDataGlobal",
+          "network": {
+            "type": "PlayerDataGlobal_t"
+          },
+          "offset": 2312,
+          "type": {
+            "category": "declared_class",
+            "module": "client",
+            "name": "PlayerDataGlobal_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CCitadelPlayerPawnBase",
+      "size": 4232,
+      "parents": [
+        {
+          "module": "client",
+          "name": "C_BasePlayerPawn"
+        }
+      ],
+      "network": {
+        "excludeByName": [
+          "m_flSimulationTime"
+        ]
+      },
+      "fields": []
+    },
+    {
+      "name": "C_BaseEntity",
+      "size": 1520,
+      "parents": [
+        {
+          "module": "entity2",
+          "name": "CEntityInstance"
+        }
+      ],
+      "network": {
+        "excludeByName": [
+          "m_bClientSideRagdoll",
+          "m_iMaxHealth",
+          "m_spawnflags",
+          "m_bTakesDamage",
+          "m_nTakeDamageFlags",
+          "m_vecAbsVelocity",
+          "m_flWaterLevel",
+          "m_vecBaseVelocity"
+        ],
+        "excludeByUserGroup": [
+          "Player",
+          "Water",
+          "LocalPlayerExclusive",
+          "LocalPlayerAndPredictorsExclusive"
+        ]
+      },
+      "fields": [
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_iMaxHealth",
+          "network": {
+            "changeCallbacks": [
+              "ObservableRecv_m_iMaxHealth"
+            ],
+            "type": "int32",
+            "userGroups": [
+              "LocalPlayerAndPredictorsExclusive"
+            ]
+          },
+          "offset": 848,
+          "type": {
+            "category": "builtin",
+            "name": "int32"
+          }
+        },
+        {
+          "name": "m_iHealth",
+          "network": {
+            "changeCallbacks": [
+              "ObservableRecv_m_iHealth"
+            ],
+            "priority": 32,
+            "serializer": "ClampHealth",
+            "type": "int32",
+            "userGroups": [
+              "Player"
+            ]
+          },
+          "offset": 852,
+          "type": {
+            "category": "builtin",
+            "name": "int32"
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_lifeState",
+          "network": {
+            "priority": 32,
+            "type": "uint8",
+            "userGroups": [
+              "Player"
+            ]
+          },
+          "offset": 860,
+          "type": {
+            "category": "builtin",
+            "name": "uint8"
+          }
+        }
+      ]
+    },
+    {
+      "name": "C_BasePlayerPawn",
+      "size": 4192,
+      "parents": [
+        {
+          "module": "client",
+          "name": "C_BaseCombatCharacter"
+        }
+      ],
+      "network": {
+        "excludeByName": [
+          "m_pWeaponServices",
+          "m_pItemServices",
+          "m_pAutoaimServices",
+          "m_pObserverServices",
+          "m_pWaterServices",
+          "m_pUseServices",
+          "m_pFlashlightServices",
+          "m_pMovementServices"
+        ],
+        "excludeByUserGroup": [
+          "FogController"
+        ],
+        "includeByUserGroup": [
+          "Player",
+          "Water",
+          "LocalPlayerExclusive",
+          "LocalPlayerAndPredictorsExclusive"
+        ],
+        "overrides": [
+          {
+            "class": "CNetworkOriginCellCoordQuantizedVector",
+            "field": "m_vecX",
+            "kind": "bitCount",
+            "value": "32"
+          },
+          {
+            "class": "CNetworkOriginCellCoordQuantizedVector",
+            "field": "m_vecY",
+            "kind": "bitCount",
+            "value": "32"
+          },
+          {
+            "class": "CNetworkOriginCellCoordQuantizedVector",
+            "field": "m_vecZ",
+            "kind": "bitCount",
+            "value": "32"
+          },
+          {
+            "field": "m_lifeState",
+            "kind": "changeCallback",
+            "value": "OnLifeStateChanged"
+          },
+          {
+            "field": "m_nNextThinkTick",
+            "kind": "userGroup",
+            "value": "LocalPlayerAndPredictorsExclusive"
+          }
+        ],
+        "userGroupProxies": [
+          "LocalPlayerExclusive"
+        ]
+      },
+      "fields": []
+    },
+    {
+      "name": "C_CitadelPlayerPawn",
+      "size": 6480,
+      "parents": [
+        {
+          "module": "client",
+          "name": "CCitadelPlayerPawnBase"
+        }
+      ],
+      "network": {
+        "includeByName": [
+          "m_pCameraServices",
+          "m_pMovementServices"
+        ],
+        "varTypeOverrides": {
+          "m_pCameraServices": "CCitadelPlayer_CameraServices",
+          "m_pMovementServices": "CCitadelPlayer_MovementServices"
+        }
+      },
+      "fields": []
+    },
+    {
+      "name": "PlayerDataGlobal_t",
+      "size": 840,
+      "parents": null,
+      "network": null,
+      "fields": [
+        {
+          "name": "m_iHealthMax",
+          "network": {
+            "type": "int32"
+          },
+          "offset": 16,
+          "type": {
+            "category": "builtin",
+            "name": "int32"
+          }
+        },
+        {
+          "name": "m_flHealthRegen",
+          "network": {
+            "type": "float"
+          },
+          "offset": 20,
+          "type": {
+            "category": "builtin",
+            "name": "float32"
+          }
+        },
+        {
+          "name": "m_iHealth",
+          "network": {
+            "type": "int32"
+          },
+          "offset": 84,
+          "type": {
+            "category": "builtin",
+            "name": "int32"
+          }
+        },
+        {
+          "name": "m_bAlive",
+          "network": {
+            "type": "bool"
+          },
+          "offset": 116,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        },
+        {
+          "name": "m_bUltimateTrained",
+          "network": {
+            "type": "bool"
+          },
+          "offset": 124,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        },
+        {
+          "name": "m_flUltimateCooldownStart",
+          "network": {
+            "sentAs": "float32",
+            "type": "GameTime_t"
+          },
+          "offset": 128,
+          "type": {
+            "category": "declared_class",
+            "module": "entity2",
+            "name": "GameTime_t"
+          }
+        },
+        {
+          "name": "m_flUltimateCooldownEnd",
+          "network": {
+            "sentAs": "float32",
+            "type": "GameTime_t"
+          },
+          "offset": 132,
+          "type": {
+            "category": "declared_class",
+            "module": "entity2",
+            "name": "GameTime_t"
+          }
+        },
+        {
+          "name": "m_flUltimateStoppedCooldownRemaining",
+          "network": {
+            "type": "float"
+          },
+          "offset": 136,
+          "type": {
+            "category": "builtin",
+            "name": "float32"
+          }
+        }
+      ]
+    }
+  ]
+}

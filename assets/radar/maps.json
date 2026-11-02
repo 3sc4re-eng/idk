@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "maps": {
+    "dl_midtown": {
+      "label": "Midtown",
+      "image": "dl_midtown.png",
+      "calibration_key": "midtown-6839-b98847d1",
+      "transform": {
+        "origin_x": 0,
+        "origin_y": 0,
+        "world_width": 21504,
+        "world_height": 21504,
+        "rotation_degrees": 0,
+        "flip_x": false,
+        "flip_y": true,
+        "offset_u": 0.5,
+        "offset_v": 0.5
+      },
+      "provenance": "Installed Deadlock ClientVersion 6839 minimap texture; Deadlock API radius 10752 and normalized XY transform. Live alignment not yet tested."
+    }
+  }
+}

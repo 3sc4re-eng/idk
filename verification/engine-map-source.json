@@ -1,0 +1,82 @@
+{
+  "module": "F:\\SteamLibrary\\steamapps\\common\\Deadlock\\game\\bin\\win64\\engine2.dll",
+  "sha256": "f7dd5763050e203361809360b4354ef3f768753bb6e43fb314d4822065d28da6",
+  "timestamp": 1792525213,
+  "image_size": 9461760,
+  "read_only_chain": {
+    "service_instance_rva": 9121056,
+    "service_expected_vtable_rva": 5372432,
+    "service_active_client_offset": 160,
+    "active_client_global_rva": 9121216,
+    "client_expected_vtable_rva": 5100872,
+    "full_map_pointer_offset": 528,
+    "short_map_pointer_offset": 536,
+    "signon_state_offset": 560,
+    "spawn_counter_offset": 580,
+    "engine_map_getter_minimum_state": 2,
+    "client_full_state": 6
+  },
+  "code_checks": [
+    {
+      "name": "service_initializer",
+      "rva": 1902421,
+      "bytes": "48 8d 05 b4 f2 34 00 48 89 05 bd 25 6e 00",
+      "size": 14
+    },
+    {
+      "name": "active_client_getter",
+      "rva": 1905328,
+      "bytes": "48 8b 81 a0 00 00 00 c3",
+      "size": 8
+    },
+    {
+      "name": "map_full_getter",
+      "rva": 471488,
+      "bytes": "48 83 ec 28 e8 97 e2 39 00 84 c0 74 0c 48 8d 05 ac f2 46 00 48 83 c4 28 c3 48 8b 0d e0 fb 83 00 48 85 c9 74 23 83 b9 30 02 00 00 02 7c 1a 48 8b 89 10 02 00 00 48 8d 05 33 01 46 00 48 85 c9 48 0f 45 c1 48 83 c4 28 c3 48 8d 05 20 01 46 00 48 83 c4 28 c3",
+      "size": 84
+    },
+    {
+      "name": "map_short_getter",
+      "rva": 471584,
+      "bytes": "48 83 ec 28 e8 37 e2 39 00 84 c0 74 0c 48 8d 05 34 f1 46 00 48 83 c4 28 c3 48 8b 0d 80 fb 83 00 48 85 c9 74 23 83 b9 30 02 00 00 02 7c 1a 48 8b 89 18 02 00 00 48 8d 05 d3 00 46 00 48 85 c9 48 0f 45 c1 48 83 c4 28 c3 48 8d 05 c0 00 46 00 48 83 c4 28 c3",
+      "size": 84
+    },
+    {
+      "name": "map_setter",
+      "rva": 538930,
+      "bytes": "48 8d 8b 10 02 00 00 4c 8b 47 48 49 83 e0 fc 49 83 78 18 0f 76 03 4d 8b 00 48 8d 15 56 37 46 00 ff 15 50 d0 3e 00 48 8b 57 48 48 83 e2 fc 48 83 7a 18 0f 76 03 48 8b 12 48 8d 8b 18 02 00 00 ff 15 11 d2 3e 00",
+      "size": 69
+    },
+    {
+      "name": "derived_map_setter",
+      "rva": 389472,
+      "bytes": "40 53 48 83 ec 20 48 8b d9 e8 a2 47 02 00 33 c9 48 89 8b 30 35 2c 00 48 89 8b 38 35 2c 00 48 89 8b 40 35 2c 00 48 89 8b 48 35 2c 00 48 83 c4 20 5b c3",
+      "size": 50
+    },
+    {
+      "name": "full_state_predicate",
+      "rva": 2066944,
+      "bytes": "48 8b 05 b9 a3 6b 00 48 85 c0 74 0b 83 b8 30 02 00 00 06 0f 94 c0 c3 c3",
+      "size": 24
+    }
+  ],
+  "claims": [
+    "CNetworkClientService static initialization installs its RTTI vtable at RVA8b2d20; vtable slot23 getter reads this+a0, equivalent to active global8b2dc0.",
+    "CEngineClient slots64/65 read activeclient+210/+218 when state>=2. Function names inferred from map-specific setter/consumer, not symbols.",
+    "CNetworkGameClientBase slot109 at83910 writes maps/%s.vpk into+210 and raw packet string into+218; CNetworkGameClient override5f160 calls it.",
+    "ProcessServerInfo code824c9 exposes+210 under literal key map, independent map semantics evidence."
+  ],
+  "limits": [
+    "No DLL loaded or getter invoked; no process/game/DMA/input code executed.",
+    "No observed runtime pointer or actual map string; live verification remains necessary.",
+    "PE identity and exact instruction/vtable checks are required before using these constants.",
+    "The getter state>=2 establishes map-name availability, not collision-ready/gameplay state."
+  ],
+  "static_vtable_entries": {
+    "service_slot23": "0x1d12b0",
+    "engine_slot64": "0x731c0",
+    "engine_slot65": "0x73220",
+    "networkbase_slot109": "0x83910",
+    "networkderived_slot109": "0x5f160"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "game_revision": 11193905,
+  "sources": {
+    "schema": "https://s2v.app/SchemaExplorer/assets/deadlock.json-DdBOyIt5.gz",
+    "sdk": "https://github.com/alliedmodders/hl2sdk/tree/deadlock/public",
+    "resource_decoder": "https://github.com/ValveResourceFormat/ValveResourceFormat"
+  },
+  "maps": [
+    {
+      "map": "dl_midtown",
+      "triangles_before_channel_filter": 2876453,
+      "capsules_and_spheres_before_filter": 65,
+      "collision_groups": 16,
+      "asset": "assets/collision/dl_midtown.acecol",
+      "asset_sha256": "7b4aede3859d6809cbca79241c3fa899cc208d9fdb41becb60865f5084d298e1",
+      "bytes": 47103964,
+      "extraction": "Source2Viewer PHYS text -> complete compound meshes/hulls + analytic capsules/spheres -> channel-filtered median BVH -> Windows XPRESS_HUFF",
+      "source_resource_sha256": "df132d2d176e95dbf1ad56dd812d007dcff7eafe8319bd4da8a56a630e153a84"
+    },
+    {
+      "map": "hero_testing",
+      "triangles_before_channel_filter": 99792,
+      "capsules_and_spheres_before_filter": 12,
+      "collision_groups": 6,
+      "asset": "assets/collision/hero_testing.acecol",
+      "asset_sha256": "2ef8fd251df693cbff5af04e3a73eaec5071b83ac8d94d8631c091681fb18d18",
+      "bytes": 1429348,
+      "extraction": "Source2Viewer PHYS text -> complete compound meshes/hulls + analytic capsules/spheres -> channel-filtered median BVH -> Windows XPRESS_HUFF"
+    }
+  ],
+  "icons": [
+    {
+      "appid": 1422450,
+      "source": "https://cdn.cloudflare.steamstatic.com/steam/apps/1422450/header.jpg",
+      "sha256": "7d07c4d15c83eb5613afee9f38e4421b841be19a9e3ea613a75e7b5a7c8212ae"
+    },
+    {
+      "appid": 1938090,
+      "source": "https://cdn.cloudflare.steamstatic.com/steam/apps/1938090/header.jpg",
+      "sha256": "1896cd1468b5e4dc18ab704c06524820dc519c1755f5781eac16a758a72e87da"
+    },
+    {
+      "appid": 3065800,
+      "source": "https://cdn.cloudflare.steamstatic.com/steam/apps/3065800/header.jpg",
+      "sha256": "4f469475e65119d7af87a25abe3573325dc31d0365dd6eb38095c574fde937ec"
+    },
+    {
+      "appid": 730,
+      "source": "https://cdn.cloudflare.steamstatic.com/steam/apps/730/header.jpg",
+      "sha256": "3d60645c8fdddc4bfe8a9e55dc1b4650311b2e8220f221908c8ef1cd94f067fa"
+    },
+    {
+      "appid": 2357570,
+      "source": "https://cdn.cloudflare.steamstatic.com/steam/apps/2357570/header.jpg",
+      "sha256": "003be188d1ff7bd8d350caecaa263740785038231b0e6e8e4e789c0b1505e2e4"
+    }
+  ]
+}

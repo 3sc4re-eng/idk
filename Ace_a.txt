@@ -1,0 +1,2341 @@
+:::FILE utils.h
+#pragma once
+#define _USE_MATH_DEFINES
+#include <cmath>
+#include <numbers>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <random>
+#include <deque>
+#include <mutex>
+#include <chrono>
+#include <map>
+#include <algorithm>
+#include <cstring>
+#include <cstdio>
+using u8=uint8_t; using u32=uint32_t; using u64=uint64_t;
+using i32=int32_t; using i64=int64_t;
+inline uint64_t now_ms(){
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+struct Vec2{ float x=0,y=0;
+    Vec2 operator+(Vec2 o)const{return{x+o.x,y+o.y};}
+    Vec2 operator-(Vec2 o)const{return{x-o.x,y-o.y};}
+    Vec2 operator*(float s)const{return{x*s,y*s};}
+    float len()const{return std::sqrt(x*x+y*y);}
+};
+struct Vec3{ float x=0,y=0,z=0;
+    Vec3 operator+(Vec3 o)const{return{x+o.x,y+o.y,z+o.z};}
+    Vec3 operator-(Vec3 o)const{return{x-o.x,y-o.y,z-o.z};}
+    Vec3 operator*(float s)const{return{x*s,y*s,z*s};}
+    float len()const{ return std::sqrt(x*x+y*y+z*z);}
+    float len2()const{ return x*x+y*y+z*z;}
+    float dist(Vec3 o)const{ return (*this-o).len();}
+};
+struct Color{ float r=1,g=1,b=1,a=1; };
+void plat_init_console();
+void plat_log(const char* fmt,...);
+// Repeated calls refresh the current operation's start time; only changed details
+// are announced. Pass false for high-frequency poll/publish phase transitions.
+void plat_stage(const std::string& component,const std::string& detail,bool announce=true);
+std::vector<std::string> plat_recent_logs();
+std::string plat_log_path();
+void plat_show_console();
+void plat_shutdown_diagnostics();
+inline float rad2deg(float r){ return r*180.f/std::numbers::pi_v<float>; }
+inline float deg2rad(float d){ return d*std::numbers::pi_v<float>/180.f; }
+inline float rnd(){ thread_local std::mt19937 rng{(u32)std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.f,1.f)(rng); }
+inline float rnd_rng(float lo,float hi){ return lo+rnd()*(hi-lo); }
+inline bool rnd_chance(float pct){ return rnd()*100.f < pct; }
+inline float clampf(float v,float lo,float hi){ return v<lo?lo:(v>hi?hi:v); }
+inline float gaussf(float mean,float sd){
+    thread_local std::mt19937 rng{(u32)std::random_device{}()};
+    return mean+sd*std::normal_distribution<float>()(rng);
+}
+struct LogEvent{ uint64_t t; std::string text; Color c; };
+inline std::mutex& log_mtx(){ static std::mutex m; return m; }
+inline std::deque<LogEvent>& toast_queue(){ static std::deque<LogEvent> t; return t; }
+inline void toast(const std::string& s, Color c={1,0.9f,0.4f,1}){
+    std::lock_guard<std::mutex> lk(log_mtx());
+    auto& t=toast_queue(); t.push_back({now_ms(),s,c});
+    if(t.size()>8) t.pop_front();
+}
+inline std::deque<LogEvent>& action_log(){ static std::deque<LogEvent> l; return l; }
+inline void action_note(const std::string& s, Color c={0.6f,0.9f,1,1}){
+    std::lock_guard<std::mutex> lk(log_mtx());
+    auto& l=action_log(); l.push_back({now_ms(),s,c});
+    if(l.size()>200) l.pop_front();
+}
+:::ENDFILE
+:::FILE utils.cpp
+#include "utils.h"
+#include "build_info.h"
+#include <windows.h>
+#include <cstdarg>
+#include <fstream>
+#include <filesystem>
+#include <atomic>
+#include <thread>
+#include <condition_variable>
+#include <sstream>
+namespace {
+constexpr std::uintmax_t max_log_bytes=5*1024*1024;
+std::mutex file_mutex,console_mutex,stage_mutex,wait_mutex;
+std::ofstream log_file;
+std::filesystem::path log_name;
+std::string session_banner;
+std::deque<std::string> recent;
+std::once_flag init_once;
+std::atomic<bool> heartbeat_running{false};
+std::condition_variable heartbeat_wake;
+std::thread heartbeat_thread;
+struct Stage {std::string detail;u64 started=0;};
+std::map<std::string,Stage> stages;
+std::string utf8(const std::wstring& value){
+    if(value.empty())return {};
+    int length=WideCharToMultiByte(CP_UTF8,0,value.data(),(int)value.size(),nullptr,0,nullptr,nullptr);
+    if(length<=0)return {};std::string result(length,'\0');
+    WideCharToMultiByte(CP_UTF8,0,value.data(),(int)value.size(),result.data(),length,nullptr,nullptr);return result;
+}
+bool rotate_locked(bool header=true){
+    if(log_name.empty())return false;
+    log_file.close();std::filesystem::path backup=log_name;backup+=L".1";
+    bool moved=MoveFileExW(log_name.c_str(),backup.c_str(),MOVEFILE_REPLACE_EXISTING)!=0;
+    log_file.open(log_name,std::ios::out|(moved?std::ios::trunc:std::ios::app));
+    if(moved&&header&&log_file.is_open())log_file<<session_banner<<'\n';
+    return moved&&log_file.is_open();
+}
+void heartbeat(){
+    std::unique_lock wait(wait_mutex);
+    while(heartbeat_running){
+        if(heartbeat_wake.wait_for(wait,std::chrono::seconds(5),[]{return !heartbeat_running.load();}))break;
+        wait.unlock();std::vector<std::pair<std::string,Stage>> snapshot;
+        {std::lock_guard lock(stage_mutex);snapshot.assign(stages.begin(),stages.end());}
+        std::string line="Health";u64 now=now_ms();
+        if(snapshot.empty())line+=" | no startup/reader stage has been registered";
+        for(const auto& item:snapshot){line+=" | "+item.first+"="+item.second.detail+" ("+std::to_string(now-item.second.started)+" ms)";if(line.size()>1700){line+=" ...";break;}}
+        plat_log("%s",line.c_str());wait.lock();
+    }
+}
+struct Shutdown {~Shutdown(){plat_shutdown_diagnostics();}} shutdown_guard;
+}
+void plat_init_console(){
+    std::call_once(init_once,[]{
+        if(!GetConsoleWindow())AllocConsole();
+        SetConsoleTitleA("AceSoftware diagnostics");
+        FILE* stream=nullptr;freopen_s(&stream,"CONOUT$","w",stdout);freopen_s(&stream,"CONOUT$","w",stderr);
+        setvbuf(stdout,nullptr,_IONBF,0);setvbuf(stderr,nullptr,_IONBF,0);
+        DWORD input_mode=0;HANDLE input=GetStdHandle(STD_INPUT_HANDLE);
+        if(GetConsoleMode(input,&input_mode))SetConsoleMode(input,(input_mode|ENABLE_EXTENDED_FLAGS)&~ENABLE_QUICK_EDIT_MODE);
+        SYSTEMTIME started{};GetSystemTime(&started);char banner[256]{};
+        snprintf(banner,sizeof(banner),"Log file | ACE session started %04u-%02u-%02u %02u:%02u:%02u.%03u UTC | Build %s",started.wYear,started.wMonth,started.wDay,started.wHour,started.wMinute,started.wSecond,started.wMilliseconds,build_info::id);session_banner=banner;
+        try{log_name=std::filesystem::absolute(L"Log file.log");}catch(...){log_name=L"Log file.log";}
+        {std::lock_guard lock(file_mutex);std::error_code error;auto length=std::filesystem::file_size(log_name,error);
+            if(!error&&length>0){if(!rotate_locked(false)){
+                log_file.close();WCHAR fallback[160]{};swprintf(fallback,std::size(fallback),L"Log file - %04u-%02u-%02u_%02u-%02u-%02u-%03u-%lu.log",started.wYear,started.wMonth,started.wDay,started.wHour,started.wMinute,started.wSecond,started.wMilliseconds,(unsigned long)GetCurrentProcessId());log_name=log_name.parent_path()/fallback;log_file.open(log_name,std::ios::out|std::ios::trunc);
+            }}else log_file.open(log_name,std::ios::out|std::ios::trunc);}
+        plat_log("%s",session_banner.c_str());
+        plat_log("Support log: %s",plat_log_path().c_str());
+        WCHAR path[32768]{};DWORD count=GetModuleFileNameW(nullptr,path,(DWORD)std::size(path));
+        if(count&&count<std::size(path))plat_log("Executable: %s",utf8(std::wstring(path,count)).c_str());
+        count=GetCurrentDirectoryW((DWORD)std::size(path),path);
+        if(count&&count<std::size(path))plat_log("Working directory: %s",utf8(std::wstring(path,count)).c_str());
+        SYSTEM_INFO system{};GetNativeSystemInfo(&system);MEMORYSTATUSEX memory{};memory.dwLength=sizeof(memory);
+        if(GlobalMemoryStatusEx(&memory))plat_log("System: architecture=%u, CPU logical processors=%lu, RAM total=%llu MiB available=%llu MiB",(unsigned)system.wProcessorArchitecture,(unsigned long)system.dwNumberOfProcessors,(unsigned long long)(memory.ullTotalPhys/1048576),(unsigned long long)(memory.ullAvailPhys/1048576));
+        DEVMODEW display{};display.dmSize=sizeof(display);
+        if(EnumDisplaySettingsW(nullptr,ENUM_CURRENT_SETTINGS,&display))plat_log("Primary display: %lux%lu at %lu Hz, %lu bits/pixel",(unsigned long)display.dmPelsWidth,(unsigned long)display.dmPelsHeight,(unsigned long)display.dmDisplayFrequency,(unsigned long)display.dmBitsPerPel);
+        plat_stage("app","startup",false);heartbeat_running=true;heartbeat_thread=std::thread(heartbeat);
+    });
+}
+void plat_log(const char* fmt,...){
+    char body[2048]{};va_list arguments;va_start(arguments,fmt);vsnprintf(body,sizeof(body),fmt,arguments);va_end(arguments);
+    SYSTEMTIME clock;GetLocalTime(&clock);char prefix[64];
+    snprintf(prefix,sizeof(prefix),"[%04u-%02u-%02u %02u:%02u:%02u.%03u] ",clock.wYear,clock.wMonth,clock.wDay,clock.wHour,clock.wMinute,clock.wSecond,clock.wMilliseconds);
+    std::string line=std::string(prefix)+body;
+    {std::lock_guard lock(file_mutex);recent.push_back(line);while(recent.size()>500)recent.pop_front();
+        if(log_file.is_open()){auto pos=log_file.tellp();if(pos>=0&&(std::uintmax_t)pos+line.size()+1>max_log_bytes)rotate_locked();log_file<<line<<'\n';log_file.flush();}}
+    // Console output never holds the file/ring mutex, so support-log snapshots
+    // and disk logging remain available even if the console host is busy.
+    {std::lock_guard lock(console_mutex);fwrite(line.data(),1,line.size(),stdout);fputc('\n',stdout);}
+}
+void plat_stage(const std::string& component,const std::string& detail,bool announce){
+    bool changed=false;
+    {std::lock_guard lock(stage_mutex);auto found=stages.find(component);changed=found==stages.end()||found->second.detail!=detail;stages[component]={detail,now_ms()};}
+    if(changed&&announce)plat_log("Stage: %s / %s",component.c_str(),detail.c_str());
+}
+std::vector<std::string> plat_recent_logs(){std::lock_guard lock(file_mutex);return {recent.begin(),recent.end()};}
+std::string plat_log_path(){std::lock_guard lock(file_mutex);return utf8(log_name.wstring());}
+void plat_show_console(){
+    HWND console=GetConsoleWindow();if(!console)return;
+    ShowWindow(console,SW_RESTORE);SetWindowPos(console,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);SetForegroundWindow(console);
+}
+void plat_shutdown_diagnostics(){
+    heartbeat_running=false;heartbeat_wake.notify_all();
+    if(heartbeat_thread.joinable()&&heartbeat_thread.get_id()!=std::this_thread::get_id())heartbeat_thread.join();
+    std::lock_guard lock(file_mutex);if(log_file.is_open()){log_file.flush();log_file.close();}
+}
+:::ENDFILE
+:::FILE game.h
+#pragma once
+#include "utils.h"
+struct GameModule{
+    const char* name;
+    const wchar_t* exes[4];
+    const char* cfg_prefix;
+    bool live;
+    const char* sig_entlist; const char* msk_entlist;
+    const char* sig_view;     const char* msk_view;
+    const char* sig_local;    const char* msk_local;
+};
+namespace games{
+    extern GameModule DEADLOCK, COD, OVERWATCH, MARATHON, CS2;
+    extern GameModule* ALL[5];
+    extern GameModule* selected;
+    GameModule* from_process(const wchar_t* exe);
+}
+:::ENDFILE
+:::FILE game.cpp
+#include "game.h"
+namespace games{
+GameModule DEADLOCK={"Deadlock",{L"deadlock.exe",L"citadel.exe",nullptr,nullptr},"deadlock",true,
+    "\x44\x8b\x0d\x00\x00\x00\x00\x45\x85\xc9\x74\x2a","xxx????xxxxx",
+    "\x0f\x10\x05\x00\x00\x00\x00\x0f\x11\x44\x24","xxx????xxxx",
+    "\x48\x8b\x05\x00\x00\x00\x00","xxx????"};
+GameModule COD={"Call of Duty",{L"cod.exe",L"cod22.exe",nullptr,nullptr},"cod",false,
+    nullptr,nullptr,nullptr,nullptr,nullptr,nullptr};
+GameModule OVERWATCH={"Overwatch",{L"Overwatch.exe",nullptr,nullptr,nullptr},"overwatch",false,
+    nullptr,nullptr,nullptr,nullptr,nullptr,nullptr};
+GameModule MARATHON={"Marathon",{L"marathon.exe",nullptr,nullptr,nullptr},"marathon",false,
+    nullptr,nullptr,nullptr,nullptr,nullptr,nullptr};
+GameModule CS2={"Counter-Strike 2",{L"cs2.exe",nullptr,nullptr,nullptr},"cs2",false,
+    nullptr,nullptr,nullptr,nullptr,nullptr,nullptr};
+GameModule* ALL[5]={&DEADLOCK,&COD,&MARATHON,&CS2,&OVERWATCH};
+GameModule* selected=&DEADLOCK;
+GameModule* from_process(const wchar_t* exe){
+    for(auto* g:ALL){
+        for(int i=0;i<4;i++){ if(!g->exes[i]) break;
+            if(_wcsicmp(exe,g->exes[i])==0) return g; }
+    }
+    return nullptr;
+}
+}
+:::ENDFILE
+:::FILE config.h
+#pragma once
+#include "utils.h"
+#include <fstream>
+#include <string>
+#include <map>
+#include <vector>
+#include <utility>
+#include <windows.h>
+#include "../deps/json.hpp"
+#include "action_pause_policy.h"
+using json = nlohmann::json;
+enum class SType{ Bool, Float, Int, Key, Color, Enum };
+struct Setting{ std::string path, name, help; SType type=SType::Bool;
+    float fmin=0, fmax=100, fstep=1; std::vector<std::string> enums;
+    bool b=false; float f=0; int i=0; Color c{1,1,1,1}; };
+class Settings{
+public:
+    std::map<std::string,Setting> m;
+    bool dirty=false;json deadzone_migration=json::object();
+    static thread_local std::string context;
+    static thread_local bool visual_team;
+    static inline thread_local std::string parents_context;
+    static inline thread_local std::vector<std::string> context_parents;
+    struct VisualScope{bool previous;VisualScope(bool team):previous(visual_team){visual_team=team;}~VisualScope(){visual_team=previous;}};
+    std::map<std::string,std::map<std::string,Setting>> overrides;
+    std::map<std::string,bool> override_enabled;
+    static bool scoped(const std::string& key){return key.rfind("aim.",0)==0||key.rfind("trigger.",0)==0;}
+    static void set_context(const std::string& name,std::vector<std::string> parents={}){context=name;parents_context=name;context_parents=std::move(parents);}
+    struct Scope {
+        std::string previous,previous_parents_context;std::vector<std::string> previous_parents;
+        Scope(const std::string& name,std::vector<std::string> parents={}):previous(context),previous_parents_context(parents_context),previous_parents(context_parents){set_context(name,std::move(parents));}
+        ~Scope(){context=std::move(previous);parents_context=std::move(previous_parents_context);context_parents=std::move(previous_parents);}
+    };
+    void enable_override(const std::string& name,bool enabled,std::vector<std::string> parents={}){
+        if(enabled&&overrides.find(name)==overrides.end()){
+            // Resolve effective category/global values before enabling a new
+            // child. Existing groups retain their own values on re-enable.
+            Scope inherited(name,std::move(parents));
+            for(const auto& kv:m)if(scoped(kv.first)){
+                const auto* inherited_value=resolved(kv.first.c_str());
+                overrides[name][kv.first]=inherited_value?*inherited_value:kv.second;
+            }
+        }
+        override_enabled[name]=enabled;dirty=true;
+    }
+    Setting* override_value(const std::string& group,const char* path,bool require_enabled){
+        if(require_enabled){const auto flag=override_enabled.find(group);if(flag==override_enabled.end()||!flag->second)return nullptr;}
+        const auto found=overrides.find(group);if(found==overrides.end())return nullptr;
+        const auto value=found->second.find(path);return value==found->second.end()?nullptr:&value->second;
+    }
+    Setting* resolved(const char* path){
+        if(visual_team&&std::string(path).rfind("esp.",0)==0){auto it=m.find(std::string("team.")+path);if(it!=m.end())return &it->second;}
+        if(!context.empty()&&scoped(path)){
+            const auto game=context.substr(0,context.find('/'));const auto global=game+"/Global";
+            if(auto* value=override_value(context,path,true))return value;
+            // Legacy direct assignments to context cannot inherit an unrelated
+            // thread-local parent list from a different active settings scope.
+            if(parents_context==context)for(const auto& parent:context_parents){
+                if(parent==context||parent==global||parent.substr(0,parent.find('/'))!=game)continue;
+                if(auto* value=override_value(parent,path,true))return value;
+            }
+            if(auto* value=override_value(global,path,false))return value;
+        }
+        auto it=m.find(path);return it==m.end()?nullptr:&it->second;
+    }
+    static bool action_output_binding(const std::string& path){
+        if(path=="auto.reload_key")return true;
+        bool action_namespace=path.rfind("auto.",0)==0||path.rfind("defense.",0)==0;
+        bool key_suffix=path.size()>=4&&path.compare(path.size()-4,4,".key")==0;
+        bool alternate_suffix=path.size()>=8&&path.compare(path.size()-8,8,".alt_key")==0;
+        return action_namespace&&(key_suffix||alternate_suffix);
+    }
+    static constexpr bool action_output_key_allowed(int key){return key>0&&key<=254&&key!=VK_LBUTTON&&key!=VK_RBUTTON;}
+    static int normalize_binding(const std::string& path,int key){return action_output_binding(path)&&!action_output_key_allowed(key)?0:key;}
+    static json encode(const Setting& s){
+        switch(s.type){case SType::Bool:return s.b;case SType::Float:return s.f;
+        case SType::Color:return json::array({s.c.r,s.c.g,s.c.b,s.c.a});case SType::Key:return normalize_binding(s.path,s.i);default:return s.i;}
+    }
+    static void decode(Setting& s,const json& v){
+        if(s.type==SType::Bool)s.b=v.get<bool>();
+        else if(s.type==SType::Float){float n=v.get<float>();if(!std::isfinite(n))throw std::runtime_error("Invalid number");s.f=clampf(n,s.fmin,s.fmax);}
+        else if(s.type==SType::Color){if(!v.is_array()||v.size()<3)throw std::runtime_error("Invalid color");const auto channel=[&](std::size_t index){float value=v[index].get<float>();if(!std::isfinite(value))throw std::runtime_error("Invalid color channel");return clampf(value,0.f,1.f);};s.c={channel(0),channel(1),channel(2),v.size()>3?channel(3):1.f};}
+        else{s.i=(int)clampf((float)v.get<int>(),s.fmin,s.fmax);if(s.type==SType::Key)s.i=normalize_binding(s.path,s.i);}
+    }
+    void defb(const char* p,const char* n,bool d){ Setting s; s.path=p;s.name=n;s.type=SType::Bool;s.b=d; m[p]=s; }
+    void deff(const char* p,const char* n,float d,float lo,float hi,float st=1){ Setting s; s.path=p;s.name=n;s.type=SType::Float;s.f=d;s.fmin=lo;s.fmax=hi;s.fstep=st; m[p]=s; }
+    void defi(const char* p,const char* n,int d,int lo,int hi){ Setting s; s.path=p;s.name=n;s.type=SType::Int;s.i=d;s.fmin=(float)lo;s.fmax=(float)hi; m[p]=s; }
+    void defk(const char* p,const char* n,int d){ Setting s; s.path=p;s.name=n;s.type=SType::Key;s.i=normalize_binding(p,d);s.fmin=0;s.fmax=254; m[p]=s; }
+    void defc(const char* p,const char* n,float r,float g,float b,float a){ Setting s; s.path=p;s.name=n;s.type=SType::Color;s.c={r,g,b,a}; m[p]=s; }
+    bool B(const char* p){auto* s=resolved(p);return action_pause_policy::operative_bool(p,s&&s->b);}
+    float F(const char* p){auto* s=resolved(p);return s?s->f:0;}
+    int I(const char* p){auto* s=resolved(p);return s?(s->type==SType::Key?normalize_binding(s->path,s->i):s->i):0;}
+    Color C(const char* p){auto* s=resolved(p);return s?s->c:Color{};}
+    Setting* find(const char* p){return resolved(p);}
+    bool write_allowed(){ return B("adv.mem_write"); }
+    json export_json()const{
+        json j;j["_motion_settings_version"]=2;j["_deadzone_settings_version"]=2;if(!deadzone_migration.empty())j["_deadzone_migration"]=deadzone_migration;for(auto& kv:m)j[kv.first]=encode(kv.second);j["_override_enabled"]=override_enabled;
+        for(auto& group:overrides)for(auto& kv:group.second)j["_overrides"][group.first][kv.first]=encode(kv.second);
+        return j;
+    }
+    static void migrate_deadzone(json& group,const json* inherited=nullptr){
+        if(!group.is_object())throw std::runtime_error("Invalid settings group");
+        if(group.contains("_deadzone_migration")&&!group["_deadzone_migration"].is_object())group.erase("_deadzone_migration");
+        auto has=[&](const char* key){return group.contains(key)||(inherited&&inherited->is_object()&&inherited->contains(key));};
+        auto read=[&](const char* key,float fallback){const json* source=group.contains(key)?&group:(inherited&&inherited->is_object()&&inherited->contains(key)?inherited:nullptr);if(!source)return fallback;const auto& value=(*source)[key];if(!value.is_number())throw std::runtime_error("Invalid legacy dead-zone number");float number=value.get<float>();if(!std::isfinite(number))throw std::runtime_error("Invalid legacy dead-zone number");return number;};
+        auto convert_pixels=[&](float pixels,float fallback,const char* label){
+            pixels=clampf(pixels,0,25);if(pixels==0){group["_deadzone_migration"][label]="legacy_zero_pixels";return 0.f;}
+            if(has("_deadzone_reference_width")&&has("_deadzone_reference_projection")){
+                float width=read("_deadzone_reference_width",0),projection=read("_deadzone_reference_projection",0);
+                if(width>0&&width<=32768&&projection>0&&projection<=100){float full_cone=rad2deg(2.f*std::atan(2.f*pixels/(width*projection)));group["_deadzone_migration"][label]=full_cone<=20?"legacy_pixels_explicit_projection":"legacy_pixels_explicit_projection_clamped";return clampf(full_cone,0,20);}
+            }
+            group["_deadzone_migration"][label]="legacy_pixels_default_without_reference";return fallback;
+        };
+        if(!group.contains("aim.deadzone_fov")&&(group.contains("aim.deadzone_units")||group.contains("aim.deadzone_degrees")||group.contains("aim.deadzone"))){
+            const int units=(int)clampf(read("aim.deadzone_units",0),0,1);
+            if(units==1){const float inherited_radius=has("aim.deadzone_fov")?read("aim.deadzone_fov",1.08f)*.5f:.54f;group["aim.deadzone_fov"]=2.f*clampf(read("aim.deadzone_degrees",inherited_radius),0,10);group["_deadzone_migration"]["aim"]="legacy_angular_radius_doubled";}
+            else group["aim.deadzone_fov"]=convert_pixels(read("aim.deadzone",9),1.08f,"aim");
+        }
+        if(!group.contains("trigger.magnet_deadzone_fov")&&group.contains("trigger.magnet_deadzone"))group["trigger.magnet_deadzone_fov"]=convert_pixels(read("trigger.magnet_deadzone",3),.36f,"magnet");
+    }
+    static void migrate_smoothing(json& j){
+        for(const char* key:{"aim.smooth","trigger.magnet_smooth"})if(j.contains(key)&&j[key].is_number()){float old=j[key].get<float>();if(std::isfinite(old))j[key]=1.f+99.f*std::log(clampf(old,1,20))/std::log(400.f);}
+    }
+    static void migrate_bones(json& j){
+        const char* names[]={"head","neck","chest","waist","abdomen","arms","legs"};
+        for(auto n:names)if(j.contains(std::string("aim.bone_")+n))return;
+        if(!j.contains("aim.hitbox")&&!j.contains("aim.points_mask"))return;
+        int mask=j.value("aim.points_mask",0),legacy=j.value("aim.hitbox",0);
+        if(!mask){legacy=legacy<0?0:(legacy>2?2:legacy);mask=1<<legacy;}
+        for(int i=0;i<7;i++)j[std::string("aim.bone_")+names[i]]=i<3&&(mask&(1<<i))?2:-1;
+        if(!j.contains("aim.points_mask")&&legacy==0){j["aim.bone_neck"]=1;for(int i=2;i<6;i++)j[std::string("aim.bone_")+names[i]]=0;}
+    }
+    bool save(const std::string& file){
+        json j=export_json();
+        std::ofstream f(file+".tmp");if(!f)return false;
+        f<<j.dump(2);f.flush();if(!f)return false;f.close();if(f.fail())return false;
+        if(!MoveFileExA((file+".tmp").c_str(),file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return false;
+        dirty=false;return true;
+    }
+    // File loads and a share-code importer use the same migration/validation path.
+    // This adds an import API; no new share-import UI is claimed here.
+    bool import_json(json j,bool mark_dirty=true){
+        if(!j.is_object())return false;
+        auto previous=m;auto old_overrides=overrides;auto old_flags=override_enabled;auto old_migration=deadzone_migration;const bool old_dirty=dirty;
+        try{
+            // The separate Counterspell binding survives the retired auto-parry
+            // feature. Unknown parry.* options are omitted from registered data.
+            if(!j.contains("defense.counterspell.key")&&j.contains("defense.parry_key"))j["defense.counterspell.key"]=j["defense.parry_key"];
+            bool legacy_motion=j.value("_motion_settings_version",1)<2;
+            if(legacy_motion)migrate_smoothing(j);
+            migrate_bones(j);migrate_deadzone(j);
+            deadzone_migration=j.contains("_deadzone_migration")&&j["_deadzone_migration"].is_object()?j["_deadzone_migration"]:json::object();
+            Settings defaults;defaults.register_all();m=defaults.m;
+            for(auto& item:j.items()){auto it=m.find(item.key());if(it!=m.end())decode(it->second,item.value());}
+            overrides.clear();override_enabled.clear();
+            if(j.contains("_override_enabled"))override_enabled=j["_override_enabled"].get<std::map<std::string,bool>>();
+            if(j.contains("_overrides"))for(auto& group:j["_overrides"].items()){
+                if(!group.value().is_object())throw std::runtime_error("Invalid override");
+                if(legacy_motion)migrate_smoothing(group.value());
+                migrate_bones(group.value());migrate_deadzone(group.value(),&j);
+                if(group.value().contains("_deadzone_migration")&&group.value()["_deadzone_migration"].is_object())deadzone_migration["overrides"][group.key()]=group.value()["_deadzone_migration"];
+                for(auto& item:group.value().items()){
+                    auto base=m.find(item.key());if(base==m.end()||!scoped(item.key()))continue;
+                    Setting value=base->second;decode(value,item.value());overrides[group.key()][item.key()]=value;
+                }
+            }
+            dirty=mark_dirty;return true;
+        }catch(...){m=std::move(previous);overrides=std::move(old_overrides);override_enabled=std::move(old_flags);deadzone_migration=std::move(old_migration);dirty=old_dirty;return false;}
+    }
+    bool load(const std::string& file){
+        std::ifstream f(file);if(!f)return false;
+        try{json j;f>>j;return import_json(std::move(j),false);}catch(...){return false;}
+    }
+    void register_all();
+};
+extern Settings cfg;
+:::ENDFILE
+:::FILE config.cpp
+#include "config.h"
+#include "settings_help.h"
+#include "world_style_config.h"
+#include "target_rules.h"
+#include "hero_catalog.h"
+#include "autouse.h"
+#include "ability_catalog.h"
+Settings cfg;
+thread_local std::string Settings::context;
+thread_local bool Settings::visual_team=false;
+void Settings::register_all(){
+    defb("aim.prediction","Projectile lead",true);defb("trigger.prediction","Fire at predicted intercept",true);defb("trigger.magnet_prediction","Magnet projectile lead",true);defb("dbg.ballistics","Show live weapon ballistics",false);
+    defb("system.autosave","Save changes automatically",true);defb("hud.keybinds","Show keybind status",true);
+    defk("system.recache_key","Refresh game data key",VK_HOME);
+    defb("esp.ultimate","Ultimate ready",true);defb("esp.abilities","Ability icons and cooldowns",false);
+    deff("esp.ability_size","Ability icon size",22,14,40,1);defb("esp.ability_seconds","Show cooldown seconds",true);
+    defb("minions.enabled","Minion ESP",false);defb("minions.box","Boxes",true);defb("minions.health","Health bars",true);defb("minions.name","Names",true);defb("minions.distance","Distance",true);
+    defi("minions.distance_limit","Maximum distance (m)",120,10,300);defc("minions.color_enemy","Enemy minions",1,.65f,.25f,1);defc("minions.color_friendly","Friendly minions",.3f,.7f,1,1);
+    defb("minions.enemy","Enemy minions",true);defb("minions.friendly","Friendly minions",false);defb("minions.troopers","Lane troopers",true);defb("minions.neutral","Neutral camps",true);defb("minions.bosses","Bosses",true);
+
+    defb("auto.active_reload","Automatic Active Reload",false);defk("auto.reload_key","Reload key on game PC",'R');
+    for(const auto& rule:autouse::rules()){
+        auto p=autouse::prefix(rule.token);defb((p+"enabled").c_str(),"Automatic use",false);defk((p+"key").c_str(),"Ability / item output key",rule.hero?(int)('1'+ability_data::find(rule.token)->slot):0);
+        deff((p+"health").c_str(),"Use below health (%)",rule.kind==autouse::Buff?60:100,1,100,1);
+        deff((p+"range").c_str(),"Enemy range (m)",rule.kind==autouse::Buff?15:50,1,50,1);
+        defi((p+"enemies").c_str(),"Minimum visible enemies",rule.kind==autouse::Area?2:1,1,6);
+        if(rule.kind==autouse::Targeted){
+            defb((p+"all_heroes").c_str(),"All heroes",std::string(rule.key)=="ability_ult_combo");defb((p+"soul_lead_only").c_str(),"Only targets with a soul lead",false);defi((p+"soul_lead").c_str(),"Minimum soul lead",3000,0,100000);
+            defb((p+"movement_ready").c_str(),"Only when selected movement is ready",std::string(rule.key)=="upgrade_containment");
+            for(const auto& hero:current_heroes)defb((p+"hero."+std::to_string(hero.id)).c_str(),hero.name,false);
+            for(const auto& ability:ability_data::entries)if(ability.hero&&target_rules::movement(ability.token))defb((p+"watch."+std::to_string(ability.token)).c_str(),ability.title,ability.token==3516947824u||ability.token==2398133749u);
+        }
+        defi((p+"friends").c_str(),"Minimum nearby teammates",rule.hero==11||std::string(rule.key)=="ability_ult_combo"?1:0,0,5);deff((p+"friend_range").c_str(),"Teammate range (m)",std::string(rule.key)=="ability_ult_combo"?10:20,1,100,1);
+    }
+    for(const auto& entry:ability_data::entries)if(entry.enemy&&!entry.passive)defb(("cleanse.watch."+std::to_string(entry.token)).c_str(),entry.title,false);
+
+    deff("aim.strength","Aim strength (%)",100,0,100,1);deff("aim.visible_ms","Minimum time in view (ms)",80,0,1000,1);
+    deff("trigger.magnet_strength","Magnet strength (%)",40,0,100,1);deff("trigger.magnet_visible_ms","Magnet minimum visible time (ms)",80,0,1000,1);
+    defi("system.map","Collision map",0,0,2);
+    defb("system.custom_resolution","Use custom resolution",false);defi("system.width","Overlay width",1920,640,7680);defi("system.height","Overlay height",1080,480,4320);
+    defi("system.overlay_mode","Overlay mode",1,0,1);defi("system.max_fps","Maximum overlay FPS",144,30,360);defb("system.fps_uncapped","Uncapped FPS",false);
+    deff("ui.menu_size","Menu size (%)",100,50,150,5);
+    deff("ui.font_size","Menu font size",15,12,20,1);deff("esp.font_size","ESP font size",15,10,28,1);
+    defk("input.test_key","Unused keyboard test key",VK_F8);
+    defb("input.autoconnect","Auto-connect input device",true);defi("input.delay_ms","Minimum time between inputs (ms)",1,0,20);defi("input.latency_ms","Added input delay (ms)",1,0,50);
+    defb("input.auto_sensitivity","Read game sensitivity",true);deff("input.sensitivity","Manual sensitivity",1,.05f,20,.05f);
+    deff("input.yaw","Yaw degrees per count",.022f,.001f,.1f,.001f);deff("input.pitch","Pitch degrees per count",.022f,.001f,.1f,.001f);
+    defb("dbg.targets","Target rejection labels",false);defb("dbg.rays","Occlusion rays",false);defb("dbg.timing","Action and reader timing",false);
+
+    defk("system.scoreboard_key","Scoreboard key on game PC",VK_TAB);
+    defb("esp.preview_visible","Preview visible player",true);
+    defc("ui.accent","Accent",.55f,.48f,.98f,1);
+    defc("ui.background","Menu background",.055f,.058f,.075f,1);
+    defc("ui.panel","Panel background",.078f,.083f,.105f,1);
+    defc("ui.text","Text",.92f,.92f,.96f,1);
+    defb("ui.splash","Show startup splash",true);
+    defi("esp.preview_hero","Preview character",1001,1,2000);
+    defc("esp.box_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.box_hidden","Hidden color",1,.8f,.15f,1);
+    deff("esp.box_width","Line width",1.5f,.5f,5,.1f);
+    defc("esp.health_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.health_hidden","Hidden color",1,.8f,.15f,1);
+    defc("esp.head_circle_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.head_circle_hidden","Hidden color",1,.8f,.15f,1);
+    deff("esp.head_circle_width","Line width",1.5f,.5f,5,.1f);
+    defc("esp.tracers_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.tracers_hidden","Hidden color",1,.8f,.15f,1);
+    deff("esp.tracers_width","Line width",1.5f,.5f,5,.1f);
+    defc("esp.name_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.name_hidden","Hidden color",1,.8f,.15f,1);
+    defc("esp.souls_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.souls_hidden","Hidden color",1,.8f,.15f,1);
+    defc("esp.distance_visible","Visible color",1,.25f,.25f,1);
+    defc("esp.distance_hidden","Hidden color",1,.8f,.15f,1);
+    defc("esp.health_low","Low health",1,.2f,.2f,1);
+    defc("esp.health_high","High health",.3f,1,.4f,1);
+    defk("system.menu_key","Menu key",0xA2);
+    defb("system.game_menu_hotkey","Also use menu key on game PC",false);
+    defk("system.panic_key","Panic key (hide everything)",0x23);
+    defb("system.overlay_vsync","VSync",true);
+    defk("input.reconnect_key","Reconnect key",0x0D);
+    defi("input.mode","Input device",0,0,2);
+    defi("input.com","COM port (0 = auto)",0,0,256);
+    defi("input.baud","Serial speed",0,0,2);
+    defi("reader.max_hz","Reader rate limit (Hz)",240,30,500);
+    defi("reader.discovery_ms","Entity discovery interval (ms)",3000,250,5000);
+    defi("reader.world_ms","World refresh interval (ms)",2000,250,5000);
+    // Compatibility storage only. B() always returns false for this retired key.
+    defb(action_pause_policy::legacy_key,"Legacy game UI pause (retired)",false);
+    defb(action_pause_policy::diagnostic_key,"Diagnostic pause on raw UI bits",action_pause_policy::diagnostic_default);
+    defb("input.disable_in_overlay","Pause while ACE menu is open",true);
+    // Default-on behavior pauses share one policy at consumers and final output.
+    defb("input.disable_when_dead","Pause while dead",true);
+    defb("input.disable_in_scoreboard","Pause while scoreboard is open",true);
+    defb("input.disable_when_spectator","Pause while spectating",true);
+    defb("target.team_check","Team check",true);
+    defb("aim.target_players","Players",true);defb("aim.target_minions","Lane minions",false);defb("aim.target_neutrals","Neutral creatures",false);
+    // Legacy input.block_output is ignored; the panic key remains available.
+    defi("aim.curve","Smoothing curve",1,0,4);
+    defi("trigger.activation","Activation",0,0,1);
+    defb("trigger.skip_fast","Avoid high-velocity targets",true);
+    defb("trigger.magnet","Magnet mode",false);
+    defi("aim.bone_head","Head priority",2,-1,2);
+    deff("aim.bone_head_chance","Head hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_neck","Neck priority",1,-1,2);
+    deff("aim.bone_neck_chance","Neck hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_chest","Chest priority",0,-1,2);
+    deff("aim.bone_chest_chance","Chest hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_waist","Waist priority",0,-1,2);
+    deff("aim.bone_waist_chance","Waist hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_abdomen","Abdomen priority",0,-1,2);
+    deff("aim.bone_abdomen_chance","Abdomen hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_arms","Arms priority",0,-1,2);
+    deff("aim.bone_arms_chance","Arms hit-chance multiplier",1,0,2,.05f);
+    defi("aim.bone_legs","Legs priority",-1,-1,2);
+    deff("aim.bone_legs_chance","Legs hit-chance multiplier",1,0,2,.05f);
+    deff("aim.deadzone_fov","Dead-zone FOV (degrees)",1.08f,0,20,.02f);
+    defb("aim.skip_fast","Avoid high-velocity targets",true);
+    deff("aim.max_speed","Max target speed (u/s)",600,100,2000,10);
+    deff("trigger.max_speed","Max target speed (u/s)",600,100,2000,10);
+    deff("trigger.magnet_fov","Magnet FOV (degrees)",10,2,90,1);
+    deff("trigger.magnet_smooth","Magnet smoothing (%)",39,1,100,1);
+    defi("trigger.magnet_curve","Magnet curve",1,0,4);
+    deff("trigger.magnet_deadzone_fov","Magnet dead-zone FOV (degrees)",.36f,0,20,.02f);
+    defb("aim.enabled","Aimbot",true);
+    defk("aim.key","Aim key",0x05);
+    defi("aim.mode","Activation",0,0,2);
+    deff("aim.fov","FOV (degrees)",20,2,90,1);
+    defb("aim.fov_circle","Draw FOV circle",true);
+    defb("aim.deadzone_draw","Draw dead zone",true);
+    deff("aim.max_dist","Aim distance (m)",80,10,300,5);
+    // ACE_NATIVE_JOINT_INTEGRATION_V1: zero explicitly retains the legacy Aim-range inheritance.
+    deff("trigger.max_dist","Trigger range (m)",0,0,300,5);
+    deff("trigger.magnet_max_dist","Magnet range (m)",0,0,300,5);
+    defi("aim.points_mask","Selected aim points (0 = legacy)",0,0,7);
+    defi("aim.point_priority","Aim-point selection",0,0,1);
+    defi("aim.hitbox","Aim point",1,0,2);
+    defi("aim.priority","Target priority",0,0,2);
+    defb("aim.hard_lock","Hard Lock",true);
+    deff("aim.smooth","Smoothing (%)",33,1,100,1);
+    deff("aim.retarget_ms","Target switch delay (ms)",350,0,1500,10);
+    deff("aim.start_delay_ms","Aim start delay (ms)",0,0,1000,5);
+    deff("aim.act_delay_min","Reaction delay min (ms)",70,1,1000,5);
+    deff("aim.act_delay_max","Reaction delay max (ms)",180,1,1000,5);
+    defk("trigger.key","Trigger key",0x02);
+    defb("trigger.enabled","Triggerbot",false);
+    deff("trigger.hitchance_min","Hit chance",70,10,100,1);
+    deff("trigger.first_shot_delay_min","Trigger delay min (ms)",70,1,600,5);
+    deff("trigger.first_shot_delay_max","Trigger delay max (ms)",160,1,600,5);
+    deff("trigger.followup_delay_min","Time between shots min (ms)",35,1,400,5);
+    deff("trigger.followup_delay_max","Time between shots max (ms)",95,1,400,5);
+    // No guessed instant attacks, bait guesses, or unverified percentage-to-impact settings.
+    defb("helper.enabled","Hero helper",true);
+    deff("helper.vindicta_dist","Vindicta execute range (m)",70,10,120,5);
+    deff("helper.dynamo_radius","Dynamo dodge radius (m)",40,5,80,5);
+    deff("helper.react_min","Reaction min (ms)",100,0,400,5);
+    deff("helper.react_max","Reaction max (ms)",250,0,600,10);
+    defi("esp.name_position","Name position",0,0,3);
+    defi("esp.souls_position","Souls position",3,0,3);
+    defi("esp.distance_position","Distance position",1,0,3);
+    defi("esp.ultimate_position","Ultimate position",0,0,3);
+    defi("esp.abilities_position","Ability row position",1,0,3);
+    defi("esp.health_position","Health bar side",0,0,1);
+    defi("esp.health_style","Health display",0,0,2);
+    defc("esp.health_mid","Mid health",1,1,.08f,1);
+    defc("esp.box_fill_visible","Visible fill",1,.25f,.25f,.12f);
+    defc("esp.box_fill_hidden","Hidden fill",1,.8f,.15f,.12f);
+    deff("esp.fade_start","Fade start (m)",72,0,400,1);
+    deff("esp.fade_end","Fade end (m)",120,1,400,1);
+    defb("esp.preview_joints","Preview skeleton",false);
+    defi("radar.listen","Radar access",0,0,1);
+    defb("visuals.enabled","Show gameplay ESP",true);
+    defb("esp.enabled","Show player ESP",true);
+    defb("esp.box","Boxes",true);
+    defi("esp.box_style","Box style",1,0,2);
+    defb("esp.health","Health display",true);
+    defb("esp.health_gradient","Health gradient",true);
+    defb("esp.name","Hero names",true);
+    defb("esp.distance","Distance",true);
+    defb("esp.souls","Souls text",true);
+    defb("esp.tracers","Tracers",false);
+    defb("esp.head_circle","Head circle",false);
+    defb("esp.fade_distance","Distance fade (legacy)",false);
+    defi("esp.draw_distance","Draw distance (m)",120,20,400);
+    defb("world.enabled","World & projectile ESP",true);
+    world_style_config::register_all(*this);
+    defb("cls.players","Players",true);
+    defb("cls.npcs","NPCs",true);
+    defb("cls.world","World objects",true);
+    defb("cls.projectiles","Projectiles",true);
+    defc("esp.color_visible","Visible color",1,0.25f,0.25f,1);
+    defc("esp.color_hidden","Hidden color",1,0.8f,0.15f,1);
+    defc("esp.color_npcs","NPC color",1,0.8f,0.2f,1);
+    defc("esp.color_world","World color",0.6f,0.6f,0.6f,1);
+    defc("esp.color_proj","Projectile color",0.9f,0.5f,1,1);
+    defb("projectiles.marker","Show marker",true);
+    defb("projectiles.name","Show name",true);
+    defb("projectiles.distance","Show distance",true);
+    deff("projectiles.marker_size","Marker size (px)",6,2,24,.5f);
+    deff("projectiles.font_size","Text size (px)",14,8,32,.5f);
+    defi("projectiles.max_dist","Draw distance (m)",120,1,400);
+    defi("radar.port","Radar port",8080,1024,65535);
+    defb("adv.mem_write","MEMORY WRITING (adds detection risk)",false);
+    // Legacy input.automatic_enabled is ignored; enabled features use their own activation settings.
+    defb("dbg.action_log","Action log",true);
+    defb("defense.counterspell.enabled","Counterspell automation",false);
+    defk("defense.counterspell.key","Counterspell output key",'F');
+    deff("defense.lead_ms","Defence lead time (ms)",140,20,750,5);
+    defb("defense.11.enabled","Defensive ability automation",false);defk("defense.11.key","Defensive ability output key",'2');
+    defb("defense.11.protect_team","Protect nearby teammates from AoE",false);defk("defense.11.alt_key","Alternate-cast key or modifier",VK_LMENU);defi("defense.11.alt_mode","Alternate cast",0,0,1);
+    defb("defense.77.enabled","Defensive ability automation",false);defk("defense.77.key","Defensive ability output key",'2');
+    defb("defense.63.enabled","Defensive ability automation",false);defk("defense.63.key","Defensive ability output key",'2');
+    defb("defense.counterspell.watch.4072270083","Siphon Life",false);
+    defb("defense.11.watch.4072270083","Siphon Life",false);
+    defb("defense.77.watch.4072270083","Siphon Life",false);
+    defb("defense.63.watch.4072270083","Siphon Life",false);
+    defb("defense.counterspell.watch.2824119765","Shoulder Charge",false);
+    defb("defense.11.watch.2824119765","Shoulder Charge",false);
+    defb("defense.77.watch.2824119765","Shoulder Charge",false);
+    defb("defense.63.watch.2824119765","Shoulder Charge",false);
+    defb("defense.counterspell.watch.715762406","Infernal Resilience",false);
+    defb("defense.11.watch.715762406","Infernal Resilience",false);
+    defb("defense.77.watch.715762406","Infernal Resilience",false);
+    defb("defense.63.watch.715762406","Infernal Resilience",false);
+    defb("defense.counterspell.watch.509856396","Seismic Impact",false);
+    defb("defense.11.watch.509856396","Seismic Impact",false);
+    defb("defense.77.watch.509856396","Seismic Impact",false);
+    defb("defense.63.watch.509856396","Seismic Impact",false);
+    defb("defense.counterspell.watch.725153709","Disengaging Sigil",false);
+    defb("defense.11.watch.725153709","Disengaging Sigil",false);
+    defb("defense.77.watch.725153709","Disengaging Sigil",false);
+    defb("defense.63.watch.725153709","Disengaging Sigil",false);
+    defb("defense.counterspell.watch.2006773718","Riposte",false);
+    defb("defense.11.watch.2006773718","Riposte",false);
+    defb("defense.77.watch.2006773718","Riposte",false);
+    defb("defense.63.watch.2006773718","Riposte",false);
+    defb("defense.counterspell.watch.147493976","Flawless Advance",false);
+    defb("defense.11.watch.147493976","Flawless Advance",false);
+    defb("defense.77.watch.147493976","Flawless Advance",false);
+    defb("defense.63.watch.147493976","Flawless Advance",false);
+    defb("defense.counterspell.watch.494112189","Itani Lo Sahn",false);
+    defb("defense.11.watch.494112189","Itani Lo Sahn",false);
+    defb("defense.77.watch.494112189","Itani Lo Sahn",false);
+    defb("defense.63.watch.494112189","Itani Lo Sahn",false);
+    defb("defense.counterspell.watch.1282689113","Threadsap",false);
+    defb("defense.11.watch.1282689113","Threadsap",false);
+    defb("defense.77.watch.1282689113","Threadsap",false);
+    defb("defense.63.watch.1282689113","Threadsap",false);
+    defb("defense.counterspell.watch.3122124161","Granny Long Legs",false);
+    defb("defense.11.watch.3122124161","Granny Long Legs",false);
+    defb("defense.77.watch.3122124161","Granny Long Legs",false);
+    defb("defense.63.watch.3122124161","Granny Long Legs",false);
+    defb("defense.counterspell.watch.2003165630","Baba's Brew",false);
+    defb("defense.11.watch.2003165630","Baba's Brew",false);
+    defb("defense.77.watch.2003165630","Baba's Brew",false);
+    defb("defense.63.watch.2003165630","Baba's Brew",false);
+    defb("defense.counterspell.watch.299875845","Feed The Birds",false);
+    defb("defense.11.watch.299875845","Feed The Birds",false);
+    defb("defense.77.watch.299875845","Feed The Birds",false);
+    defb("defense.63.watch.299875845","Feed The Birds",false);
+    defb("defense.counterspell.watch.3089858203","Exploding Uppercut",false);
+    defb("defense.11.watch.3089858203","Exploding Uppercut",false);
+    defb("defense.77.watch.3089858203","Exploding Uppercut",false);
+    defb("defense.63.watch.3089858203","Exploding Uppercut",false);
+    defb("defense.counterspell.watch.2521902222","Sticky Bomb",false);
+    defb("defense.11.watch.2521902222","Sticky Bomb",false);
+    defb("defense.77.watch.2521902222","Sticky Bomb",false);
+    defb("defense.63.watch.2521902222","Sticky Bomb",false);
+    defb("defense.counterspell.watch.1928108461","Grapple Arm",false);
+    defb("defense.11.watch.1928108461","Grapple Arm",false);
+    defb("defense.77.watch.1928108461","Grapple Arm",false);
+    defb("defense.63.watch.1928108461","Grapple Arm",false);
+    defb("defense.counterspell.watch.3832675871","Hyper Beam",false);
+    defb("defense.11.watch.3832675871","Hyper Beam",false);
+    defb("defense.77.watch.3832675871","Hyper Beam",false);
+    defb("defense.63.watch.3832675871","Hyper Beam",false);
+    defb("defense.counterspell.watch.1841661392","Bashdown",false);
+    defb("defense.11.watch.1841661392","Bashdown",false);
+    defb("defense.77.watch.1841661392","Bashdown",false);
+    defb("defense.63.watch.1841661392","Bashdown",false);
+    defb("defense.counterspell.watch.1792773251","Rising Ram",false);
+    defb("defense.11.watch.1792773251","Rising Ram",false);
+    defb("defense.77.watch.1792773251","Rising Ram",false);
+    defb("defense.63.watch.1792773251","Rising Ram",false);
+    defb("defense.counterspell.watch.3296031213","Blasted",false);
+    defb("defense.11.watch.3296031213","Blasted",false);
+    defb("defense.77.watch.3296031213","Blasted",false);
+    defb("defense.63.watch.3296031213","Blasted",false);
+    defb("defense.counterspell.watch.3762861984","Chain Gang",false);
+    defb("defense.11.watch.3762861984","Chain Gang",false);
+    defb("defense.77.watch.3762861984","Chain Gang",false);
+    defb("defense.63.watch.3762861984","Chain Gang",false);
+    defb("defense.counterspell.watch.4131517918","Gloom Bombs",false);
+    defb("defense.11.watch.4131517918","Gloom Bombs",false);
+    defb("defense.77.watch.4131517918","Gloom Bombs",false);
+    defb("defense.63.watch.4131517918","Gloom Bombs",false);
+    defb("defense.counterspell.watch.1426567660","Leaping Slash",false);
+    defb("defense.11.watch.1426567660","Leaping Slash",false);
+    defb("defense.77.watch.1426567660","Leaping Slash",false);
+    defb("defense.63.watch.1426567660","Leaping Slash",false);
+    defb("defense.counterspell.watch.1009029159","Ava",false);
+    defb("defense.11.watch.1009029159","Ava",false);
+    defb("defense.77.watch.1009029159","Ava",false);
+    defb("defense.63.watch.1009029159","Ava",false);
+    defb("defense.counterspell.watch.2054144742","Return to Shadows",false);
+    defb("defense.11.watch.2054144742","Return to Shadows",false);
+    defb("defense.77.watch.2054144742","Return to Shadows",false);
+    defb("defense.63.watch.2054144742","Return to Shadows",false);
+    defb("defense.counterspell.watch.3443575800","Light Eater",false);
+    defb("defense.11.watch.3443575800","Light Eater",false);
+    defb("defense.77.watch.3443575800","Light Eater",false);
+    defb("defense.63.watch.3443575800","Light Eater",false);
+    defb("defense.counterspell.watch.1950738949","Dazzling Trick",false);
+    defb("defense.11.watch.1950738949","Dazzling Trick",false);
+    defb("defense.77.watch.1950738949","Dazzling Trick",false);
+    defb("defense.63.watch.1950738949","Dazzling Trick",false);
+    defb("defense.counterspell.watch.1011349580","Radiant Daggers",false);
+    defb("defense.11.watch.1011349580","Radiant Daggers",false);
+    defb("defense.77.watch.1011349580","Radiant Daggers",false);
+    defb("defense.63.watch.1011349580","Radiant Daggers",false);
+    defb("defense.counterspell.watch.2590796390","Shining Wonder",false);
+    defb("defense.11.watch.2590796390","Shining Wonder",false);
+    defb("defense.77.watch.2590796390","Shining Wonder",false);
+    defb("defense.63.watch.2590796390","Shining Wonder",false);
+    defb("defense.counterspell.watch.2603013853","Strix Salvo",false);
+    defb("defense.11.watch.2603013853","Strix Salvo",false);
+    defb("defense.77.watch.2603013853","Strix Salvo",false);
+    defb("defense.63.watch.2603013853","Strix Salvo",false);
+    defb("defense.counterspell.watch.1904698842","Chimera Mk1",false);
+    defb("defense.11.watch.1904698842","Chimera Mk1",false);
+    defb("defense.77.watch.1904698842","Chimera Mk1",false);
+    defb("defense.63.watch.1904698842","Chimera Mk1",false);
+    defb("defense.counterspell.watch.374042410","Jettison Fuel",false);
+    defb("defense.11.watch.374042410","Jettison Fuel",false);
+    defb("defense.77.watch.374042410","Jettison Fuel",false);
+    defb("defense.63.watch.374042410","Jettison Fuel",false);
+    defb("defense.counterspell.watch.1026127931","Close The Deal",false);
+    defb("defense.11.watch.1026127931","Close The Deal",false);
+    defb("defense.77.watch.1026127931","Close The Deal",false);
+    defb("defense.63.watch.1026127931","Close The Deal",false);
+    defb("defense.counterspell.watch.3120550633","Rend",false);
+    defb("defense.11.watch.3120550633","Rend",false);
+    defb("defense.77.watch.3120550633","Rend",false);
+    defb("defense.63.watch.3120550633","Rend",false);
+    defb("defense.counterspell.watch.1264175662","Stalker's Mark",false);
+    defb("defense.11.watch.1264175662","Stalker's Mark",false);
+    defb("defense.77.watch.1264175662","Stalker's Mark",false);
+    defb("defense.63.watch.1264175662","Stalker's Mark",false);
+    defb("defense.counterspell.watch.1033019133","Bloodscent",false);
+    defb("defense.11.watch.1033019133","Bloodscent",false);
+    defb("defense.77.watch.1033019133","Bloodscent",false);
+    defb("defense.63.watch.1033019133","Bloodscent",false);
+    defb("defense.counterspell.watch.1168182161","Eternal Night",false);
+    defb("defense.11.watch.1168182161","Eternal Night",false);
+    defb("defense.77.watch.1168182161","Eternal Night",false);
+    defb("defense.63.watch.1168182161","Eternal Night",false);
+    defb("defense.counterspell.watch.3760705623","Kinetic Pulse",false);
+    defb("defense.11.watch.3760705623","Kinetic Pulse",false);
+    defb("defense.77.watch.3760705623","Kinetic Pulse",false);
+    defb("defense.63.watch.3760705623","Kinetic Pulse",false);
+    defb("defense.counterspell.watch.2031714424","Quantum Entanglement",false);
+    defb("defense.11.watch.2031714424","Quantum Entanglement",false);
+    defb("defense.77.watch.2031714424","Quantum Entanglement",false);
+    defb("defense.63.watch.2031714424","Quantum Entanglement",false);
+    defb("defense.counterspell.watch.492030745","Rejuvenating Aurora",false);
+    defb("defense.11.watch.492030745","Rejuvenating Aurora",false);
+    defb("defense.77.watch.492030745","Rejuvenating Aurora",false);
+    defb("defense.63.watch.492030745","Rejuvenating Aurora",false);
+    defb("defense.counterspell.watch.249410288","Singularity",false);
+    defb("defense.11.watch.249410288","Singularity",false);
+    defb("defense.77.watch.249410288","Singularity",false);
+    defb("defense.63.watch.249410288","Singularity",false);
+    defb("defense.counterspell.watch.3214055642","Jar of Dead",false);
+    defb("defense.11.watch.3214055642","Jar of Dead",false);
+    defb("defense.77.watch.3214055642","Jar of Dead",false);
+    defb("defense.63.watch.3214055642","Jar of Dead",false);
+    defb("defense.counterspell.watch.2001589780","Grasping Hands",false);
+    defb("defense.11.watch.2001589780","Grasping Hands",false);
+    defb("defense.77.watch.2001589780","Grasping Hands",false);
+    defb("defense.63.watch.2001589780","Grasping Hands",false);
+    defb("defense.counterspell.watch.629925354","Essence Theft",false);
+    defb("defense.11.watch.629925354","Essence Theft",false);
+    defb("defense.77.watch.629925354","Essence Theft",false);
+    defb("defense.63.watch.629925354","Essence Theft",false);
+    defb("defense.counterspell.watch.4110547059","Borrowed Decree",false);
+    defb("defense.11.watch.4110547059","Borrowed Decree",false);
+    defb("defense.77.watch.4110547059","Borrowed Decree",false);
+    defb("defense.63.watch.4110547059","Borrowed Decree",false);
+    defb("defense.counterspell.watch.548943648","Charged Shot",false);
+    defb("defense.11.watch.548943648","Charged Shot",false);
+    defb("defense.77.watch.548943648","Charged Shot",false);
+    defb("defense.63.watch.548943648","Charged Shot",false);
+    defb("defense.counterspell.watch.3452399392","Rain of Arrows",false);
+    defb("defense.11.watch.3452399392","Rain of Arrows",false);
+    defb("defense.77.watch.3452399392","Rain of Arrows",false);
+    defb("defense.63.watch.3452399392","Rain of Arrows",false);
+    defb("defense.counterspell.watch.512733154","Spirit Snare",false);
+    defb("defense.11.watch.512733154","Spirit Snare",false);
+    defb("defense.77.watch.512733154","Spirit Snare",false);
+    defb("defense.63.watch.512733154","Spirit Snare",false);
+    defb("defense.counterspell.watch.3242902780","Guided Owl",false);
+    defb("defense.11.watch.3242902780","Guided Owl",false);
+    defb("defense.77.watch.3242902780","Guided Owl",false);
+    defb("defense.63.watch.3242902780","Guided Owl",false);
+    defb("defense.counterspell.watch.2948410412","Sleep Dagger",false);
+    defb("defense.11.watch.2948410412","Sleep Dagger",false);
+    defb("defense.77.watch.2948410412","Sleep Dagger",false);
+    defb("defense.63.watch.2948410412","Sleep Dagger",false);
+    defb("defense.counterspell.watch.2414191464","Smoke Bomb",false);
+    defb("defense.11.watch.2414191464","Smoke Bomb",false);
+    defb("defense.77.watch.2414191464","Smoke Bomb",false);
+    defb("defense.63.watch.2414191464","Smoke Bomb",false);
+    defb("defense.counterspell.watch.1080948381","Fixation",false);
+    defb("defense.11.watch.1080948381","Fixation",false);
+    defb("defense.77.watch.1080948381","Fixation",false);
+    defb("defense.63.watch.1080948381","Fixation",false);
+    defb("defense.counterspell.watch.731943444","Bullet Dance",false);
+    defb("defense.11.watch.731943444","Bullet Dance",false);
+    defb("defense.77.watch.731943444","Bullet Dance",false);
+    defb("defense.63.watch.731943444","Bullet Dance",false);
+    defb("defense.counterspell.watch.1235098866","Powder Keg",false);
+    defb("defense.11.watch.1235098866","Powder Keg",false);
+    defb("defense.77.watch.1235098866","Powder Keg",false);
+    defb("defense.63.watch.1235098866","Powder Keg",false);
+    defb("defense.counterspell.watch.2240607294","Bounce Pad",false);
+    defb("defense.11.watch.2240607294","Bounce Pad",false);
+    defb("defense.77.watch.2240607294","Bounce Pad",false);
+    defb("defense.63.watch.2240607294","Bounce Pad",false);
+    defb("defense.counterspell.watch.4179229681","Crackshot",false);
+    defb("defense.11.watch.4179229681","Crackshot",false);
+    defb("defense.77.watch.4179229681","Crackshot",false);
+    defb("defense.63.watch.4179229681","Crackshot",false);
+    defb("defense.counterspell.watch.3190606822","Spirit Lasso",false);
+    defb("defense.11.watch.3190606822","Spirit Lasso",false);
+    defb("defense.77.watch.3190606822","Spirit Lasso",false);
+    defb("defense.63.watch.3190606822","Spirit Lasso",false);
+    defb("defense.counterspell.watch.491391007","Napalm",false);
+    defb("defense.11.watch.491391007","Napalm",false);
+    defb("defense.77.watch.491391007","Napalm",false);
+    defb("defense.63.watch.491391007","Napalm",false);
+    defb("defense.counterspell.watch.3516947824","Flame Dash",false);
+    defb("defense.11.watch.3516947824","Flame Dash",false);
+    defb("defense.77.watch.3516947824","Flame Dash",false);
+    defb("defense.63.watch.3516947824","Flame Dash",false);
+    defb("defense.counterspell.watch.1593133799","Afterburn",false);
+    defb("defense.11.watch.1593133799","Afterburn",false);
+    defb("defense.77.watch.1593133799","Afterburn",false);
+    defb("defense.63.watch.1593133799","Afterburn",false);
+    defb("defense.counterspell.watch.1142270357","Concussive Combustion",false);
+    defb("defense.11.watch.1142270357","Concussive Combustion",false);
+    defb("defense.77.watch.1142270357","Concussive Combustion",false);
+    defb("defense.63.watch.1142270357","Concussive Combustion",false);
+    defb("defense.counterspell.watch.4111222521","Entangling Thorns",false);
+    defb("defense.11.watch.4111222521","Entangling Thorns",false);
+    defb("defense.77.watch.4111222521","Entangling Thorns",false);
+    defb("defense.63.watch.4111222521","Entangling Thorns",false);
+    defb("defense.counterspell.watch.1531378655","Kudzu Connection",false);
+    defb("defense.11.watch.1531378655","Kudzu Connection",false);
+    defb("defense.77.watch.1531378655","Kudzu Connection",false);
+    defb("defense.63.watch.1531378655","Kudzu Connection",false);
+    defb("defense.counterspell.watch.3642273386","Stone Form",false);
+    defb("defense.11.watch.3642273386","Stone Form",false);
+    defb("defense.77.watch.3642273386","Stone Form",false);
+    defb("defense.63.watch.3642273386","Stone Form",false);
+    defb("defense.counterspell.watch.1247583368","Air Drop",false);
+    defb("defense.11.watch.1247583368","Air Drop",false);
+    defb("defense.77.watch.1247583368","Air Drop",false);
+    defb("defense.63.watch.1247583368","Air Drop",false);
+    defb("defense.counterspell.watch.18921423","Frost Grenade",false);
+    defb("defense.11.watch.18921423","Frost Grenade",false);
+    defb("defense.77.watch.18921423","Frost Grenade",false);
+    defb("defense.63.watch.18921423","Frost Grenade",false);
+    defb("defense.counterspell.watch.1963397252","Ice Path",false);
+    defb("defense.11.watch.1963397252","Ice Path",false);
+    defb("defense.77.watch.1963397252","Ice Path",false);
+    defb("defense.63.watch.1963397252","Ice Path",false);
+    defb("defense.counterspell.watch.2351041382","Arctic Beam",false);
+    defb("defense.11.watch.2351041382","Arctic Beam",false);
+    defb("defense.77.watch.2351041382","Arctic Beam",false);
+    defb("defense.63.watch.2351041382","Arctic Beam",false);
+    defb("defense.counterspell.watch.3826390464","Frozen Shelter",false);
+    defb("defense.11.watch.3826390464","Frozen Shelter",false);
+    defb("defense.77.watch.3826390464","Frozen Shelter",false);
+    defb("defense.63.watch.3826390464","Frozen Shelter",false);
+    defb("defense.counterspell.watch.715325746","Essence Bomb",false);
+    defb("defense.11.watch.715325746","Essence Bomb",false);
+    defb("defense.77.watch.715325746","Essence Bomb",false);
+    defb("defense.63.watch.715325746","Essence Bomb",false);
+    defb("defense.counterspell.watch.218284420","Life Drain",false);
+    defb("defense.11.watch.218284420","Life Drain",false);
+    defb("defense.77.watch.218284420","Life Drain",false);
+    defb("defense.63.watch.218284420","Life Drain",false);
+    defb("defense.counterspell.watch.3230530872","Malice",false);
+    defb("defense.11.watch.3230530872","Malice",false);
+    defb("defense.77.watch.3230530872","Malice",false);
+    defb("defense.63.watch.3230530872","Malice",false);
+    defb("defense.counterspell.watch.1307289689","Soul Exchange",false);
+    defb("defense.11.watch.1307289689","Soul Exchange",false);
+    defb("defense.77.watch.1307289689","Soul Exchange",false);
+    defb("defense.63.watch.1307289689","Soul Exchange",false);
+    defb("defense.counterspell.watch.3561817145","Ground Strike",false);
+    defb("defense.11.watch.3561817145","Ground Strike",false);
+    defb("defense.77.watch.3561817145","Ground Strike",false);
+    defb("defense.63.watch.3561817145","Ground Strike",false);
+    defb("defense.counterspell.watch.2670099061","Grapple",false);
+    defb("defense.11.watch.2670099061","Grapple",false);
+    defb("defense.77.watch.2670099061","Grapple",false);
+    defb("defense.63.watch.2670099061","Grapple",false);
+    defb("defense.counterspell.watch.519124136","Flog",false);
+    defb("defense.11.watch.519124136","Flog",false);
+    defb("defense.77.watch.519124136","Flog",false);
+    defb("defense.63.watch.519124136","Flog",false);
+    defb("defense.counterspell.watch.397010810","Death Slam",false);
+    defb("defense.11.watch.397010810","Death Slam",false);
+    defb("defense.77.watch.397010810","Death Slam",false);
+    defb("defense.63.watch.397010810","Death Slam",false);
+    defb("defense.counterspell.watch.3133377790","Mini Turret",false);
+    defb("defense.11.watch.3133377790","Mini Turret",false);
+    defb("defense.77.watch.3133377790","Mini Turret",false);
+    defb("defense.63.watch.3133377790","Mini Turret",false);
+    defb("defense.counterspell.watch.2142734020","Medicinal Specter",false);
+    defb("defense.11.watch.2142734020","Medicinal Specter",false);
+    defb("defense.77.watch.2142734020","Medicinal Specter",false);
+    defb("defense.63.watch.2142734020","Medicinal Specter",false);
+    defb("defense.counterspell.watch.1725685134","Spectral Wall",false);
+    defb("defense.11.watch.1725685134","Spectral Wall",false);
+    defb("defense.77.watch.1725685134","Spectral Wall",false);
+    defb("defense.63.watch.1725685134","Spectral Wall",false);
+    defb("defense.counterspell.watch.3503044146","Heavy Barrage",false);
+    defb("defense.11.watch.3503044146","Heavy Barrage",false);
+    defb("defense.77.watch.3503044146","Heavy Barrage",false);
+    defb("defense.63.watch.3503044146","Heavy Barrage",false);
+    defb("defense.counterspell.watch.193508101","Rake",false);
+    defb("defense.11.watch.193508101","Rake",false);
+    defb("defense.77.watch.193508101","Rake",false);
+    defb("defense.63.watch.193508101","Rake",false);
+    defb("defense.counterspell.watch.2398133749","Sanguine Retreat",false);
+    defb("defense.11.watch.2398133749","Sanguine Retreat",false);
+    defb("defense.77.watch.2398133749","Sanguine Retreat",false);
+    defb("defense.63.watch.2398133749","Sanguine Retreat",false);
+    defb("defense.counterspell.watch.1233782561","Love Bites",false);
+    defb("defense.11.watch.1233782561","Love Bites",false);
+    defb("defense.77.watch.1233782561","Love Bites",false);
+    defb("defense.63.watch.1233782561","Love Bites",false);
+    defb("defense.counterspell.watch.3379486147","Nox Nostra",false);
+    defb("defense.11.watch.3379486147","Nox Nostra",false);
+    defb("defense.77.watch.3379486147","Nox Nostra",false);
+    defb("defense.63.watch.3379486147","Nox Nostra",false);
+    defb("defense.counterspell.watch.3733594387","Fire Scarabs",false);
+    defb("defense.11.watch.3733594387","Fire Scarabs",false);
+    defb("defense.77.watch.3733594387","Fire Scarabs",false);
+    defb("defense.63.watch.3733594387","Fire Scarabs",false);
+    defb("defense.counterspell.watch.1336069669","Dust Devil",false);
+    defb("defense.11.watch.1336069669","Dust Devil",false);
+    defb("defense.77.watch.1336069669","Dust Devil",false);
+    defb("defense.63.watch.1336069669","Dust Devil",false);
+    defb("defense.counterspell.watch.2221949202","Djinn's Mark",false);
+    defb("defense.11.watch.2221949202","Djinn's Mark",false);
+    defb("defense.77.watch.2221949202","Djinn's Mark",false);
+    defb("defense.63.watch.2221949202","Djinn's Mark",false);
+    defb("defense.counterspell.watch.2604653402","Traveler",false);
+    defb("defense.11.watch.2604653402","Traveler",false);
+    defb("defense.77.watch.2604653402","Traveler",false);
+    defb("defense.63.watch.2604653402","Traveler",false);
+    defb("defense.counterspell.watch.1454278799","Scorn",false);
+    defb("defense.11.watch.1454278799","Scorn",false);
+    defb("defense.77.watch.1454278799","Scorn",false);
+    defb("defense.63.watch.1454278799","Scorn",false);
+    defb("defense.counterspell.watch.2406758797","Burrow",false);
+    defb("defense.11.watch.2406758797","Burrow",false);
+    defb("defense.77.watch.2406758797","Burrow",false);
+    defb("defense.63.watch.2406758797","Burrow",false);
+    defb("defense.counterspell.watch.1914797280","Sand Blast",false);
+    defb("defense.11.watch.1914797280","Sand Blast",false);
+    defb("defense.77.watch.1914797280","Sand Blast",false);
+    defb("defense.63.watch.1914797280","Sand Blast",false);
+    defb("defense.counterspell.watch.1917840730","Combo",false);
+    defb("defense.11.watch.1917840730","Combo",false);
+    defb("defense.77.watch.1917840730","Combo",false);
+    defb("defense.63.watch.1917840730","Combo",false);
+    defb("defense.counterspell.watch.267712790","Leech Therapy",false);
+    defb("defense.11.watch.267712790","Leech Therapy",false);
+    defb("defense.77.watch.267712790","Leech Therapy",false);
+    defb("defense.63.watch.267712790","Leech Therapy",false);
+    defb("defense.counterspell.watch.3621314027","Wretched Vapors",false);
+    defb("defense.11.watch.3621314027","Wretched Vapors",false);
+    defb("defense.77.watch.3621314027","Wretched Vapors",false);
+    defb("defense.63.watch.3621314027","Wretched Vapors",false);
+    defb("defense.counterspell.watch.683490631","Healing Needles",false);
+    defb("defense.11.watch.683490631","Healing Needles",false);
+    defb("defense.77.watch.683490631","Healing Needles",false);
+    defb("defense.63.watch.683490631","Healing Needles",false);
+    defb("defense.counterspell.watch.3427093887","Lurking Terrors",false);
+    defb("defense.11.watch.3427093887","Lurking Terrors",false);
+    defb("defense.77.watch.3427093887","Lurking Terrors",false);
+    defb("defense.63.watch.3427093887","Lurking Terrors",false);
+    defb("defense.counterspell.watch.604448162","Bookwyrm",false);
+    defb("defense.11.watch.604448162","Bookwyrm",false);
+    defb("defense.77.watch.604448162","Bookwyrm",false);
+    defb("defense.63.watch.604448162","Bookwyrm",false);
+    defb("defense.counterspell.watch.3553292912","Plot Armor",false);
+    defb("defense.11.watch.3553292912","Plot Armor",false);
+    defb("defense.77.watch.3553292912","Plot Armor",false);
+    defb("defense.63.watch.3553292912","Plot Armor",false);
+    defb("defense.counterspell.watch.3054993162","Captivating Read",false);
+    defb("defense.11.watch.3054993162","Captivating Read",false);
+    defb("defense.77.watch.3054993162","Captivating Read",false);
+    defb("defense.63.watch.3054993162","Captivating Read",false);
+    defb("defense.counterspell.watch.1841901343","Rallying Charge",false);
+    defb("defense.11.watch.1841901343","Rallying Charge",false);
+    defb("defense.77.watch.1841901343","Rallying Charge",false);
+    defb("defense.63.watch.1841901343","Rallying Charge",false);
+    defb("defense.counterspell.watch.58655583","Pulse Grenade",false);
+    defb("defense.11.watch.58655583","Pulse Grenade",false);
+    defb("defense.77.watch.58655583","Pulse Grenade",false);
+    defb("defense.63.watch.58655583","Pulse Grenade",false);
+    defb("defense.counterspell.watch.1366719170","Time Wall",false);
+    defb("defense.11.watch.1366719170","Time Wall",false);
+    defb("defense.77.watch.1366719170","Time Wall",false);
+    defb("defense.63.watch.1366719170","Time Wall",false);
+    defb("defense.counterspell.watch.1128670012","Kinetic Carbine",false);
+    defb("defense.11.watch.1128670012","Kinetic Carbine",false);
+    defb("defense.77.watch.1128670012","Kinetic Carbine",false);
+    defb("defense.63.watch.1128670012","Kinetic Carbine",false);
+    defb("defense.counterspell.watch.2917891787","Paradoxical Swap",false);
+    defb("defense.11.watch.2917891787","Paradoxical Swap",false);
+    defb("defense.77.watch.2917891787","Paradoxical Swap",false);
+    defb("defense.63.watch.2917891787","Paradoxical Swap",false);
+    defb("defense.counterspell.watch.938149308","Barrage",false);
+    defb("defense.11.watch.938149308","Barrage",false);
+    defb("defense.77.watch.938149308","Barrage",false);
+    defb("defense.63.watch.938149308","Barrage",false);
+    defb("defense.counterspell.watch.1976701714","Flying Cloak",false);
+    defb("defense.11.watch.1976701714","Flying Cloak",false);
+    defb("defense.77.watch.1976701714","Flying Cloak",false);
+    defb("defense.63.watch.1976701714","Flying Cloak",false);
+    defb("defense.counterspell.watch.3747867012","Enchanter's Satchel",false);
+    defb("defense.11.watch.3747867012","Enchanter's Satchel",false);
+    defb("defense.77.watch.3747867012","Enchanter's Satchel",false);
+    defb("defense.63.watch.3747867012","Enchanter's Satchel",false);
+    defb("defense.counterspell.watch.2954330093","Affliction",false);
+    defb("defense.11.watch.2954330093","Affliction",false);
+    defb("defense.77.watch.2954330093","Affliction",false);
+    defb("defense.63.watch.2954330093","Affliction",false);
+    defb("defense.counterspell.watch.3002308408","Scrap Grenade",false);
+    defb("defense.11.watch.3002308408","Scrap Grenade",false);
+    defb("defense.77.watch.3002308408","Scrap Grenade",false);
+    defb("defense.63.watch.3002308408","Scrap Grenade",false);
+    defb("defense.counterspell.watch.3681399397","Rat Swarm",false);
+    defb("defense.11.watch.3681399397","Rat Swarm",false);
+    defb("defense.77.watch.3681399397","Rat Swarm",false);
+    defb("defense.63.watch.3681399397","Rat Swarm",false);
+    defb("defense.counterspell.watch.690412829","Royal Pestments",false);
+    defb("defense.11.watch.690412829","Royal Pestments",false);
+    defb("defense.77.watch.690412829","Royal Pestments",false);
+    defb("defense.63.watch.690412829","Royal Pestments",false);
+    defb("defense.counterspell.watch.1627989937","Rule, Ratannia!",false);
+    defb("defense.11.watch.1627989937","Rule, Ratannia!",false);
+    defb("defense.77.watch.1627989937","Rule, Ratannia!",false);
+    defb("defense.63.watch.1627989937","Rule, Ratannia!",false);
+    defb("defense.counterspell.watch.3692321247","Pillow Toss",false);
+    defb("defense.11.watch.3692321247","Pillow Toss",false);
+    defb("defense.77.watch.3692321247","Pillow Toss",false);
+    defb("defense.63.watch.3692321247","Pillow Toss",false);
+    defb("defense.counterspell.watch.1568845221","Tag Along",false);
+    defb("defense.11.watch.1568845221","Tag Along",false);
+    defb("defense.77.watch.1568845221","Tag Along",false);
+    defb("defense.63.watch.1568845221","Tag Along",false);
+    defb("defense.counterspell.watch.536278136","Lil Helpers",false);
+    defb("defense.11.watch.536278136","Lil Helpers",false);
+    defb("defense.77.watch.536278136","Lil Helpers",false);
+    defb("defense.63.watch.536278136","Lil Helpers",false);
+    defb("defense.counterspell.watch.2396527575","Naptime",false);
+    defb("defense.11.watch.2396527575","Naptime",false);
+    defb("defense.77.watch.2396527575","Naptime",false);
+    defb("defense.63.watch.2396527575","Naptime",false);
+    defb("defense.counterspell.watch.1065103387","Lightning Ball",false);
+    defb("defense.11.watch.1065103387","Lightning Ball",false);
+    defb("defense.77.watch.1065103387","Lightning Ball",false);
+    defb("defense.63.watch.1065103387","Lightning Ball",false);
+    defb("defense.counterspell.watch.1074714947","Static Charge",false);
+    defb("defense.11.watch.1074714947","Static Charge",false);
+    defb("defense.77.watch.1074714947","Static Charge",false);
+    defb("defense.63.watch.1074714947","Static Charge",false);
+    defb("defense.counterspell.watch.539192269","Power Surge",false);
+    defb("defense.11.watch.539192269","Power Surge",false);
+    defb("defense.77.watch.539192269","Power Surge",false);
+    defb("defense.63.watch.539192269","Power Surge",false);
+    defb("defense.counterspell.watch.2061574352","Storm Cloud",false);
+    defb("defense.11.watch.2061574352","Storm Cloud",false);
+    defb("defense.77.watch.2061574352","Storm Cloud",false);
+    defb("defense.63.watch.2061574352","Storm Cloud",false);
+    defb("defense.counterspell.watch.2460791803","Serrated Knives",false);
+    defb("defense.11.watch.2460791803","Serrated Knives",false);
+    defb("defense.77.watch.2460791803","Serrated Knives",false);
+    defb("defense.63.watch.2460791803","Serrated Knives",false);
+    defb("defense.counterspell.watch.1458044103","Slice and Dice",false);
+    defb("defense.11.watch.1458044103","Slice and Dice",false);
+    defb("defense.77.watch.1458044103","Slice and Dice",false);
+    defb("defense.63.watch.1458044103","Slice and Dice",false);
+    defb("defense.counterspell.watch.1537272748","Bloodletting",false);
+    defb("defense.11.watch.1537272748","Bloodletting",false);
+    defb("defense.77.watch.1537272748","Bloodletting",false);
+    defb("defense.63.watch.1537272748","Bloodletting",false);
+    defb("defense.counterspell.watch.1835738020","Killing Blow",false);
+    defb("defense.11.watch.1835738020","Killing Blow",false);
+    defb("defense.77.watch.1835738020","Killing Blow",false);
+    defb("defense.63.watch.1835738020","Killing Blow",false);
+    defb("defense.counterspell.watch.1385849824","Slam Fire",false);
+    defb("defense.11.watch.1385849824","Slam Fire",false);
+    defb("defense.77.watch.1385849824","Slam Fire",false);
+    defb("defense.63.watch.1385849824","Slam Fire",false);
+    defb("defense.counterspell.watch.2717130900","Boot Kick",false);
+    defb("defense.11.watch.2717130900","Boot Kick",false);
+    defb("defense.77.watch.2717130900","Boot Kick",false);
+    defb("defense.63.watch.2717130900","Boot Kick",false);
+    defb("defense.counterspell.watch.3983754897","Entangling Bola",false);
+    defb("defense.11.watch.3983754897","Entangling Bola",false);
+    defb("defense.77.watch.3983754897","Entangling Bola",false);
+    defb("defense.63.watch.3983754897","Entangling Bola",false);
+    defb("defense.counterspell.watch.515791019","Lycan Curse",false);
+    defb("defense.11.watch.515791019","Lycan Curse",false);
+    defb("defense.77.watch.515791019","Lycan Curse",false);
+    defb("defense.63.watch.515791019","Lycan Curse",false);
+    defb("defense.counterspell.watch.3156905386","Vexing Bolt",false);
+    defb("defense.11.watch.3156905386","Vexing Bolt",false);
+    defb("defense.77.watch.3156905386","Vexing Bolt",false);
+    defb("defense.63.watch.3156905386","Vexing Bolt",false);
+    defb("defense.counterspell.watch.12456023","Spectral Assistant",false);
+    defb("defense.11.watch.12456023","Spectral Assistant",false);
+    defb("defense.77.watch.12456023","Spectral Assistant",false);
+    defb("defense.63.watch.12456023","Spectral Assistant",false);
+    defb("defense.counterspell.watch.2142213586","Rabbit Hex",false);
+    defb("defense.11.watch.2142213586","Rabbit Hex",false);
+    defb("defense.77.watch.2142213586","Rabbit Hex",false);
+    defb("defense.63.watch.2142213586","Rabbit Hex",false);
+    defb("defense.counterspell.watch.191022746","Audience Participation",false);
+    defb("defense.11.watch.191022746","Audience Participation",false);
+    defb("defense.77.watch.191022746","Audience Participation",false);
+    defb("defense.63.watch.191022746","Audience Participation",false);
+    defb("defense.counterspell.watch.4011110259","Setup Bishop",false);
+    defb("defense.11.watch.4011110259","Setup Bishop",false);
+    defb("defense.77.watch.4011110259","Setup Bishop",false);
+    defb("defense.63.watch.4011110259","Setup Bishop",false);
+    defb("defense.counterspell.watch.4180486641","Kingside Knight",false);
+    defb("defense.11.watch.4180486641","Kingside Knight",false);
+    defb("defense.77.watch.4180486641","Kingside Knight",false);
+    defb("defense.63.watch.4180486641","Kingside Knight",false);
+    defb("defense.counterspell.watch.2424652896","Rook Battery",false);
+    defb("defense.11.watch.2424652896","Rook Battery",false);
+    defb("defense.77.watch.2424652896","Rook Battery",false);
+    defb("defense.63.watch.2424652896","Rook Battery",false);
+    defb("defense.counterspell.watch.1389230689","Develop Queen",false);
+    defb("defense.11.watch.1389230689","Develop Queen",false);
+    defb("defense.77.watch.1389230689","Develop Queen",false);
+    defb("defense.63.watch.1389230689","Develop Queen",false);
+    defb("defense.counterspell.watch.103496908","Call Bell",false);
+    defb("defense.11.watch.103496908","Call Bell",false);
+    defb("defense.77.watch.103496908","Call Bell",false);
+    defb("defense.63.watch.103496908","Call Bell",false);
+    defb("defense.counterspell.watch.109766091","Doorway",false);
+    defb("defense.11.watch.109766091","Doorway",false);
+    defb("defense.77.watch.109766091","Doorway",false);
+    defb("defense.63.watch.109766091","Doorway",false);
+    defb("defense.counterspell.watch.1719512318","Luggage Cart",false);
+    defb("defense.11.watch.1719512318","Luggage Cart",false);
+    defb("defense.77.watch.1719512318","Luggage Cart",false);
+    defb("defense.63.watch.1719512318","Luggage Cart",false);
+    defb("defense.counterspell.watch.1703045691","Hotel Guest",false);
+    defb("defense.11.watch.1703045691","Hotel Guest",false);
+    defb("defense.77.watch.1703045691","Hotel Guest",false);
+    defb("defense.63.watch.1703045691","Hotel Guest",false);
+    defb("defense.counterspell.watch.911307831","Consecrating Grenade",false);
+    defb("defense.11.watch.911307831","Consecrating Grenade",false);
+    defb("defense.77.watch.911307831","Consecrating Grenade",false);
+    defb("defense.63.watch.911307831","Consecrating Grenade",false);
+    defb("defense.counterspell.watch.1764146857","Gutshot",false);
+    defb("defense.11.watch.1764146857","Gutshot",false);
+    defb("defense.77.watch.1764146857","Gutshot",false);
+    defb("defense.63.watch.1764146857","Gutshot",false);
+    defb("defense.counterspell.watch.11154161","Hex-Lined Snap Trap",false);
+    defb("defense.11.watch.11154161","Hex-Lined Snap Trap",false);
+    defb("defense.77.watch.11154161","Hex-Lined Snap Trap",false);
+    defb("defense.63.watch.11154161","Hex-Lined Snap Trap",false);
+    defb("defense.counterspell.watch.2918874166","Ira Domini",false);
+    defb("defense.11.watch.2918874166","Ira Domini",false);
+    defb("defense.77.watch.2918874166","Ira Domini",false);
+    defb("defense.63.watch.2918874166","Ira Domini",false);
+    defb("defense.counterspell.watch.2043074967","Pain Battery",false);
+    defb("defense.11.watch.2043074967","Pain Battery",false);
+    defb("defense.77.watch.2043074967","Pain Battery",false);
+    defb("defense.63.watch.2043074967","Pain Battery",false);
+    defb("defense.counterspell.watch.3727084744","Jumpstart",false);
+    defb("defense.11.watch.3727084744","Jumpstart",false);
+    defb("defense.77.watch.3727084744","Jumpstart",false);
+    defb("defense.63.watch.3727084744","Jumpstart",false);
+    defb("defense.counterspell.watch.1472593493","Aura of Suffering",false);
+    defb("defense.11.watch.1472593493","Aura of Suffering",false);
+    defb("defense.77.watch.1472593493","Aura of Suffering",false);
+    defb("defense.63.watch.1472593493","Aura of Suffering",false);
+    defb("defense.counterspell.watch.3493884851","Shocking Reanimation",false);
+    defb("defense.11.watch.3493884851","Shocking Reanimation",false);
+    defb("defense.77.watch.3493884851","Shocking Reanimation",false);
+    defb("defense.63.watch.3493884851","Shocking Reanimation",false);
+    defb("defense.counterspell.watch.537527508","Stake",false);
+    defb("defense.11.watch.537527508","Stake",false);
+    defb("defense.77.watch.537527508","Stake",false);
+    defb("defense.63.watch.537527508","Stake",false);
+    defb("defense.counterspell.watch.1796564033","Flight",false);
+    defb("defense.11.watch.1796564033","Flight",false);
+    defb("defense.77.watch.1796564033","Flight",false);
+    defb("defense.63.watch.1796564033","Flight",false);
+    defb("defense.counterspell.watch.2048438176","Crow Familiar",false);
+    defb("defense.11.watch.2048438176","Crow Familiar",false);
+    defb("defense.77.watch.2048438176","Crow Familiar",false);
+    defb("defense.63.watch.2048438176","Crow Familiar",false);
+    defb("defense.counterspell.watch.775377419","Assassinate",false);
+    defb("defense.11.watch.775377419","Assassinate",false);
+    defb("defense.77.watch.775377419","Assassinate",false);
+    defb("defense.63.watch.775377419","Assassinate",false);
+    defb("defense.counterspell.watch.836615329","Living Ink",false);
+    defb("defense.11.watch.836615329","Living Ink",false);
+    defb("defense.77.watch.836615329","Living Ink",false);
+    defb("defense.63.watch.836615329","Living Ink",false);
+    defb("defense.counterspell.watch.3389503777","Flow State",false);
+    defb("defense.11.watch.3389503777","Flow State",false);
+    defb("defense.77.watch.3389503777","Flow State",false);
+    defb("defense.63.watch.3389503777","Flow State",false);
+    defb("defense.counterspell.watch.3612874202","Still Life",false);
+    defb("defense.11.watch.3612874202","Still Life",false);
+    defb("defense.77.watch.3612874202","Still Life",false);
+    defb("defense.63.watch.3612874202","Still Life",false);
+    defb("defense.counterspell.watch.2516700978","Abstract Landscape",false);
+    defb("defense.11.watch.2516700978","Abstract Landscape",false);
+    defb("defense.77.watch.2516700978","Abstract Landscape",false);
+    defb("defense.63.watch.2516700978","Abstract Landscape",false);
+    defb("defense.counterspell.watch.3247040238","Splatter",false);
+    defb("defense.11.watch.3247040238","Splatter",false);
+    defb("defense.77.watch.3247040238","Splatter",false);
+    defb("defense.63.watch.3247040238","Splatter",false);
+    defb("defense.counterspell.watch.3788152387","The Cube",false);
+    defb("defense.11.watch.3788152387","The Cube",false);
+    defb("defense.77.watch.3788152387","The Cube",false);
+    defb("defense.63.watch.3788152387","The Cube",false);
+    defb("defense.counterspell.watch.1020817390","Puddle Punch",false);
+    defb("defense.11.watch.1020817390","Puddle Punch",false);
+    defb("defense.77.watch.1020817390","Puddle Punch",false);
+    defb("defense.63.watch.1020817390","Puddle Punch",false);
+    defb("defense.counterspell.watch.4206531918","Goo Ball",false);
+    defb("defense.11.watch.4206531918","Goo Ball",false);
+    defb("defense.77.watch.4206531918","Goo Ball",false);
+    defb("defense.63.watch.4206531918","Goo Ball",false);
+    defb("defense.counterspell.watch.645773760","Screwjab Dagger",false);
+    defb("defense.11.watch.645773760","Screwjab Dagger",false);
+    defb("defense.77.watch.645773760","Screwjab Dagger",false);
+    defb("defense.63.watch.645773760","Screwjab Dagger",false);
+    defb("defense.counterspell.watch.3428732129","Lethal Venom",false);
+    defb("defense.11.watch.3428732129","Lethal Venom",false);
+    defb("defense.77.watch.3428732129","Lethal Venom",false);
+    defb("defense.63.watch.3428732129","Lethal Venom",false);
+    defb("defense.counterspell.watch.1469918191","Slither",false);
+    defb("defense.11.watch.1469918191","Slither",false);
+    defb("defense.77.watch.1469918191","Slither",false);
+    defb("defense.63.watch.1469918191","Slither",false);
+    defb("defense.counterspell.watch.1594727071","Petrifying Bola",false);
+    defb("defense.11.watch.1594727071","Petrifying Bola",false);
+    defb("defense.77.watch.1594727071","Petrifying Bola",false);
+    defb("defense.63.watch.1594727071","Petrifying Bola",false);
+    defb("defense.counterspell.watch.2656490109","Alchemical Flask",false);
+    defb("defense.11.watch.2656490109","Alchemical Flask",false);
+    defb("defense.77.watch.2656490109","Alchemical Flask",false);
+    defb("defense.63.watch.2656490109","Alchemical Flask",false);
+    defb("defense.counterspell.watch.2751689917","Willpower",false);
+    defb("defense.11.watch.2751689917","Willpower",false);
+    defb("defense.77.watch.2751689917","Willpower",false);
+    defb("defense.63.watch.2751689917","Willpower",false);
+    defb("defense.counterspell.watch.1656913918","Binding Word",false);
+    defb("defense.11.watch.1656913918","Binding Word",false);
+    defb("defense.77.watch.1656913918","Binding Word",false);
+    defb("defense.63.watch.1656913918","Binding Word",false);
+    defb("defense.counterspell.watch.2702908623","Last Stand",false);
+    defb("defense.11.watch.2702908623","Last Stand",false);
+    defb("defense.77.watch.2702908623","Last Stand",false);
+    defb("defense.63.watch.2702908623","Last Stand",false);
+    defb("defense.counterspell.watch.1999680326","Card Trick",false);
+    defb("defense.11.watch.1999680326","Card Trick",false);
+    defb("defense.77.watch.1999680326","Card Trick",false);
+    defb("defense.63.watch.1999680326","Card Trick",false);
+    defb("defense.counterspell.watch.4147641675","Project Mind",false);
+    defb("defense.11.watch.4147641675","Project Mind",false);
+    defb("defense.77.watch.4147641675","Project Mind",false);
+    defb("defense.63.watch.4147641675","Project Mind",false);
+    defb("defense.counterspell.watch.1842576017","Full Auto",false);
+    defb("defense.11.watch.1842576017","Full Auto",false);
+    defb("defense.77.watch.1842576017","Full Auto",false);
+    defb("defense.63.watch.1842576017","Full Auto",false);
+    defb("defense.counterspell.watch.2981692841","Telekinesis",false);
+    defb("defense.11.watch.2981692841","Telekinesis",false);
+    defb("defense.77.watch.2981692841","Telekinesis",false);
+    defb("defense.63.watch.2981692841","Telekinesis",false);
+    defb("defense.counterspell.watch.3255651252","Power Slash",false);
+    defb("defense.11.watch.3255651252","Power Slash",false);
+    defb("defense.77.watch.3255651252","Power Slash",false);
+    defb("defense.63.watch.3255651252","Power Slash",false);
+    defb("defense.counterspell.watch.2566573207","Flying Slash",false);
+    defb("defense.11.watch.2566573207","Flying Slash",false);
+    defb("defense.77.watch.2566573207","Flying Slash",false);
+    defb("defense.63.watch.2566573207","Flying Slash",false);
+    defb("defense.counterspell.watch.2366960452","Crimson Slash",false);
+    defb("defense.11.watch.2366960452","Crimson Slash",false);
+    defb("defense.77.watch.2366960452","Crimson Slash",false);
+    defb("defense.63.watch.2366960452","Crimson Slash",false);
+    defb("defense.counterspell.watch.3319782965","Shadow Transformation",false);
+    defb("defense.11.watch.3319782965","Shadow Transformation",false);
+    defb("defense.77.watch.3319782965","Shadow Transformation",false);
+    defb("defense.63.watch.3319782965","Shadow Transformation",false);
+    defb("defense.counterspell.watch.709540378","Cultist Sacrifice",false);
+    defb("defense.11.watch.709540378","Cultist Sacrifice",false);
+    defb("defense.77.watch.709540378","Cultist Sacrifice",false);
+    defb("defense.63.watch.709540378","Cultist Sacrifice",false);
+    defb("defense.counterspell.watch.710436191","Capacitor",false);
+    defb("defense.11.watch.710436191","Capacitor",false);
+    defb("defense.77.watch.710436191","Capacitor",false);
+    defb("defense.63.watch.710436191","Capacitor",false);
+    defb("defense.counterspell.watch.1414025773","Counterspell",false);
+    defb("defense.11.watch.1414025773","Counterspell",false);
+    defb("defense.77.watch.1414025773","Counterspell",false);
+    defb("defense.63.watch.1414025773","Counterspell",false);
+    defb("defense.counterspell.watch.2108215830","Heroic Aura",false);
+    defb("defense.11.watch.2108215830","Heroic Aura",false);
+    defb("defense.77.watch.2108215830","Heroic Aura",false);
+    defb("defense.63.watch.2108215830","Heroic Aura",false);
+    defb("defense.counterspell.watch.619484391","Silence Wave",false);
+    defb("defense.11.watch.619484391","Silence Wave",false);
+    defb("defense.77.watch.619484391","Silence Wave",false);
+    defb("defense.63.watch.619484391","Silence Wave",false);
+    defb("defense.counterspell.watch.3927044172","Haunting Scream",false);
+    defb("defense.11.watch.3927044172","Haunting Scream",false);
+    defb("defense.77.watch.3927044172","Haunting Scream",false);
+    defb("defense.63.watch.3927044172","Haunting Scream",false);
+    defb("defense.counterspell.watch.3133167885","Silencer",false);
+    defb("defense.11.watch.3133167885","Silencer",false);
+    defb("defense.77.watch.3133167885","Silencer",false);
+    defb("defense.63.watch.3133167885","Silencer",false);
+    defb("defense.counterspell.watch.3731635960","Dispel Magic",false);
+    defb("defense.11.watch.3731635960","Dispel Magic",false);
+    defb("defense.77.watch.3731635960","Dispel Magic",false);
+    defb("defense.63.watch.3731635960","Dispel Magic",false);
+    defb("defense.counterspell.watch.1378931225","Metal Skin",false);
+    defb("defense.11.watch.1378931225","Metal Skin",false);
+    defb("defense.77.watch.1378931225","Metal Skin",false);
+    defb("defense.63.watch.1378931225","Metal Skin",false);
+    defb("defense.counterspell.watch.1672893796","Grit",false);
+    defb("defense.11.watch.1672893796","Grit",false);
+    defb("defense.77.watch.1672893796","Grit",false);
+    defb("defense.63.watch.1672893796","Grit",false);
+    defb("defense.counterspell.watch.3361075077","Return Fire",false);
+    defb("defense.11.watch.3361075077","Return Fire",false);
+    defb("defense.77.watch.3361075077","Return Fire",false);
+    defb("defense.63.watch.3361075077","Return Fire",false);
+    defb("defense.counterspell.watch.3456645009","Shadow Step",false);
+    defb("defense.11.watch.3456645009","Shadow Step",false);
+    defb("defense.77.watch.3456645009","Shadow Step",false);
+    defb("defense.63.watch.3456645009","Shadow Step",false);
+    defb("defense.counterspell.watch.1813726886","Slowing Hex",false);
+    defb("defense.11.watch.1813726886","Slowing Hex",false);
+    defb("defense.77.watch.1813726886","Slowing Hex",false);
+    defb("defense.63.watch.1813726886","Slowing Hex",false);
+    defb("defense.counterspell.watch.1219329868","Spirit Sap",false);
+    defb("defense.11.watch.1219329868","Spirit Sap",false);
+    defb("defense.77.watch.1219329868","Spirit Sap",false);
+    defb("defense.63.watch.1219329868","Spirit Sap",false);
+    defb("defense.counterspell.watch.2142980412","Focus Lens",false);
+    defb("defense.11.watch.2142980412","Focus Lens",false);
+    defb("defense.77.watch.2142980412","Focus Lens",false);
+    defb("defense.63.watch.2142980412","Focus Lens",false);
+    defb("defense.counterspell.watch.2922054143","Rusted Barrel",false);
+    defb("defense.11.watch.2922054143","Rusted Barrel",false);
+    defb("defense.77.watch.2922054143","Rusted Barrel",false);
+    defb("defense.63.watch.2922054143","Rusted Barrel",false);
+    defb("defense.counterspell.watch.2061878743","Disarming Hex",false);
+    defb("defense.11.watch.2061878743","Disarming Hex",false);
+    defb("defense.77.watch.2061878743","Disarming Hex",false);
+    defb("defense.63.watch.2061878743","Disarming Hex",false);
+    defb("defense.counterspell.watch.1804594021","Rescue Beam",false);
+    defb("defense.11.watch.1804594021","Rescue Beam",false);
+    defb("defense.77.watch.1804594021","Rescue Beam",false);
+    defb("defense.63.watch.1804594021","Rescue Beam",false);
+    defb("defense.counterspell.watch.3144988365","Decay",false);
+    defb("defense.11.watch.3144988365","Decay",false);
+    defb("defense.77.watch.3144988365","Decay",false);
+    defb("defense.63.watch.3144988365","Decay",false);
+    defb("defense.counterspell.watch.2417568017","Scourge",false);
+    defb("defense.11.watch.2417568017","Scourge",false);
+    defb("defense.77.watch.2417568017","Scourge",false);
+    defb("defense.63.watch.2417568017","Scourge",false);
+    defb("defense.counterspell.watch.1254091416","Knockdown",false);
+    defb("defense.11.watch.1254091416","Knockdown",false);
+    defb("defense.77.watch.1254091416","Knockdown",false);
+    defb("defense.63.watch.1254091416","Knockdown",false);
+    defb("defense.counterspell.watch.1371725689","Phantom Strike",false);
+    defb("defense.11.watch.1371725689","Phantom Strike",false);
+    defb("defense.77.watch.1371725689","Phantom Strike",false);
+    defb("defense.63.watch.1371725689","Phantom Strike",false);
+    defb("defense.counterspell.watch.3270001687","Warp Stone",false);
+    defb("defense.11.watch.3270001687","Warp Stone",false);
+    defb("defense.77.watch.3270001687","Warp Stone",false);
+    defb("defense.63.watch.3270001687","Warp Stone",false);
+    defb("defense.counterspell.watch.1152158042","Vortex Web",false);
+    defb("defense.11.watch.1152158042","Vortex Web",false);
+    defb("defense.77.watch.1152158042","Vortex Web",false);
+    defb("defense.63.watch.1152158042","Vortex Web",false);
+    defb("defense.counterspell.watch.677738769","Refresher",false);
+    defb("defense.11.watch.677738769","Refresher",false);
+    defb("defense.77.watch.677738769","Refresher",false);
+    defb("defense.63.watch.677738769","Refresher",false);
+    defb("defense.counterspell.watch.630839635","Echo Shard",false);
+    defb("defense.11.watch.630839635","Echo Shard",false);
+    defb("defense.77.watch.630839635","Echo Shard",false);
+    defb("defense.63.watch.630839635","Echo Shard",false);
+    defb("defense.counterspell.watch.1798666702","Shadow Weave",false);
+    defb("defense.11.watch.1798666702","Shadow Weave",false);
+    defb("defense.77.watch.1798666702","Shadow Weave",false);
+    defb("defense.63.watch.1798666702","Shadow Weave",false);
+    defb("defense.counterspell.watch.3830846077","Majestic Leap - Disabled",false);
+    defb("defense.11.watch.3830846077","Majestic Leap - Disabled",false);
+    defb("defense.77.watch.3830846077","Majestic Leap - Disabled",false);
+    defb("defense.63.watch.3830846077","Majestic Leap - Disabled",false);
+    defb("defense.counterspell.watch.600033864","Majestic Leap",false);
+    defb("defense.11.watch.600033864","Majestic Leap",false);
+    defb("defense.77.watch.600033864","Majestic Leap",false);
+    defb("defense.63.watch.600033864","Majestic Leap",false);
+    defb("defense.counterspell.watch.2956256701","Healing Nova",false);
+    defb("defense.11.watch.2956256701","Healing Nova",false);
+    defb("defense.77.watch.2956256701","Healing Nova",false);
+    defb("defense.63.watch.2956256701","Healing Nova",false);
+    defb("defense.counterspell.watch.2059712766","Restorative Locket",false);
+    defb("defense.11.watch.2059712766","Restorative Locket",false);
+    defb("defense.77.watch.2059712766","Restorative Locket",false);
+    defb("defense.63.watch.2059712766","Restorative Locket",false);
+    defb("defense.counterspell.watch.1710079648","Healing Rite",false);
+    defb("defense.11.watch.1710079648","Healing Rite",false);
+    defb("defense.77.watch.1710079648","Healing Rite",false);
+    defb("defense.63.watch.1710079648","Healing Rite",false);
+    defb("defense.counterspell.watch.4121584236","Shrink Ray",false);
+    defb("defense.11.watch.4121584236","Shrink Ray",false);
+    defb("defense.77.watch.4121584236","Shrink Ray",false);
+    defb("defense.63.watch.4121584236","Shrink Ray",false);
+    defb("defense.counterspell.watch.1797283378","Infuser",false);
+    defb("defense.11.watch.1797283378","Infuser",false);
+    defb("defense.77.watch.1797283378","Infuser",false);
+    defb("defense.63.watch.1797283378","Infuser",false);
+    defb("defense.counterspell.watch.857669956","Guardian Ward",false);
+    defb("defense.11.watch.857669956","Guardian Ward",false);
+    defb("defense.77.watch.857669956","Guardian Ward",false);
+    defb("defense.63.watch.857669956","Guardian Ward",false);
+    defb("defense.counterspell.watch.1662311306","Divine Barrier",false);
+    defb("defense.11.watch.1662311306","Divine Barrier",false);
+    defb("defense.77.watch.1662311306","Divine Barrier",false);
+    defb("defense.63.watch.1662311306","Divine Barrier",false);
+    defb("defense.counterspell.watch.1932939246","Alchemical Fire",false);
+    defb("defense.11.watch.1932939246","Alchemical Fire",false);
+    defb("defense.77.watch.1932939246","Alchemical Fire",false);
+    defb("defense.63.watch.1932939246","Alchemical Fire",false);
+    defb("defense.counterspell.watch.989206714","Blood Tribute",false);
+    defb("defense.11.watch.989206714","Blood Tribute",false);
+    defb("defense.77.watch.989206714","Blood Tribute",false);
+    defb("defense.63.watch.989206714","Blood Tribute",false);
+    defb("defense.counterspell.watch.3403085434","Fleetfoot",false);
+    defb("defense.11.watch.3403085434","Fleetfoot",false);
+    defb("defense.77.watch.3403085434","Fleetfoot",false);
+    defb("defense.63.watch.3403085434","Fleetfoot",false);
+    defb("defense.counterspell.watch.3357231760","Unstoppable",false);
+    defb("defense.11.watch.3357231760","Unstoppable",false);
+    defb("defense.77.watch.3357231760","Unstoppable",false);
+    defb("defense.63.watch.3357231760","Unstoppable",false);
+    defb("defense.counterspell.watch.2407781327","Colossus",false);
+    defb("defense.11.watch.2407781327","Colossus",false);
+    defb("defense.77.watch.2407781327","Colossus",false);
+    defb("defense.63.watch.2407781327","Colossus",false);
+    defb("defense.counterspell.watch.1976391348","Cold Front",false);
+    defb("defense.11.watch.1976391348","Cold Front",false);
+    defb("defense.77.watch.1976391348","Cold Front",false);
+    defb("defense.63.watch.1976391348","Cold Front",false);
+    defb("defense.counterspell.watch.3812615317","Arctic Blast",false);
+    defb("defense.11.watch.3812615317","Arctic Blast",false);
+    defb("defense.77.watch.3812615317","Arctic Blast",false);
+    defb("defense.63.watch.3812615317","Arctic Blast",false);
+    defb("defense.counterspell.watch.2533252781","Ethereal Shift",false);
+    defb("defense.11.watch.2533252781","Ethereal Shift",false);
+    defb("defense.77.watch.2533252781","Ethereal Shift",false);
+    defb("defense.63.watch.2533252781","Ethereal Shift",false);
+    defb("defense.counterspell.watch.2617435668","Cursed Relic",false);
+    defb("defense.11.watch.2617435668","Cursed Relic",false);
+    defb("defense.77.watch.2617435668","Cursed Relic",false);
+    defb("defense.63.watch.2617435668","Cursed Relic",false);
+    defb("defense.counterspell.watch.1409190604","Fury Trance",false);
+    defb("defense.11.watch.1409190604","Fury Trance",false);
+    defb("defense.77.watch.1409190604","Fury Trance",false);
+    defb("defense.63.watch.1409190604","Fury Trance",false);
+    defb("defense.counterspell.watch.1055679805","Vampiric Burst",false);
+    defb("defense.11.watch.1055679805","Vampiric Burst",false);
+    defb("defense.77.watch.1055679805","Vampiric Burst",false);
+    defb("defense.63.watch.1055679805","Vampiric Burst",false);
+    defb("defense.counterspell.watch.3647584222","Split Shot",false);
+    defb("defense.11.watch.3647584222","Split Shot",false);
+    defb("defense.77.watch.3647584222","Split Shot",false);
+    defb("defense.63.watch.3647584222","Split Shot",false);
+    defb("defense.counterspell.watch.2800629741","Magic Carpet",false);
+    defb("defense.11.watch.2800629741","Magic Carpet",false);
+    defb("defense.77.watch.2800629741","Magic Carpet",false);
+    defb("defense.63.watch.2800629741","Magic Carpet",false);
+    defb("defense.counterspell.watch.3346798998","Endless Magazine",false);
+    defb("defense.11.watch.3346798998","Endless Magazine",false);
+    defb("defense.77.watch.3346798998","Endless Magazine",false);
+    defb("defense.63.watch.3346798998","Endless Magazine",false);
+    defb("defense.counterspell.watch.2054088113","Mystical Piano",false);
+    defb("defense.11.watch.2054088113","Mystical Piano",false);
+    defb("defense.77.watch.2054088113","Mystical Piano",false);
+    defb("defense.63.watch.2054088113","Mystical Piano",false);
+    defb("defense.counterspell.watch.3949773228","Nullification Burst",false);
+    defb("defense.11.watch.3949773228","Nullification Burst",false);
+    defb("defense.77.watch.3949773228","Nullification Burst",false);
+    defb("defense.63.watch.3949773228","Nullification Burst",false);
+    defb("defense.counterspell.watch.3729138568","Celestial Blessing",false);
+    defb("defense.11.watch.3729138568","Celestial Blessing",false);
+    defb("defense.77.watch.3729138568","Celestial Blessing",false);
+    defb("defense.63.watch.3729138568","Celestial Blessing",false);
+    defb("defense.counterspell.watch.1132564516","Prism Blast",false);
+    defb("defense.11.watch.1132564516","Prism Blast",false);
+    defb("defense.77.watch.1132564516","Prism Blast",false);
+    defb("defense.63.watch.1132564516","Prism Blast",false);
+    defb("defense.counterspell.watch.1558545403","Unstable Concoction",false);
+    defb("defense.11.watch.1558545403","Unstable Concoction",false);
+    defb("defense.77.watch.1558545403","Unstable Concoction",false);
+    defb("defense.63.watch.1558545403","Unstable Concoction",false);
+    defb("defense.counterspell.watch.2462046703","Golden Goose Egg",false);
+    defb("defense.11.watch.2462046703","Golden Goose Egg",false);
+    defb("defense.77.watch.2462046703","Golden Goose Egg",false);
+    defb("defense.63.watch.2462046703","Golden Goose Egg",false);
+    defb("defense.counterspell.watch.664285540","Parry",false);
+    defb("defense.11.watch.664285540","Parry",false);
+    defb("defense.77.watch.664285540","Parry",false);
+    defb("defense.63.watch.664285540","Parry",false);
+    for(const char* feature:{"name","souls","distance","ultimate"}){std::string p=std::string("esp.")+feature;defb((p+"_global_font").c_str(),"Use global text size",true);deff((p+"_font").c_str(),"Text size",14,9,28);if(std::string(feature)!="souls"&&std::string(feature)!="ultimate")defb((p+"_outline").c_str(),"Text outline",true);}
+    defc("esp.ultimate_color","Ultimate ready color",.4f,1,.55f,1);
+    std::vector<Setting> teammates;
+    for(auto& kv:m)if(kv.first.rfind("esp.",0)==0){auto value=kv.second;value.path="team."+kv.first;if(kv.first=="esp.enabled")value.b=false;teammates.push_back(value);}
+    for(auto& setting:teammates)m[setting.path]=setting;
+    for(auto& pair:m)pair.second.help=setting_help::describe(pair.first,pair.second.name);
+}
+:::ENDFILE
+:::FILE dma.h
+#pragma once
+#include "utils.h"
+#include "vmm_api.h"
+#include "memory_batch.h"
+#include "dma_scatter_session.h"
+#include <windows.h>
+#include <string>
+#include <atomic>
+#include <limits>
+struct GameModule;
+struct MemStatus{ bool ok=false; std::string text="disconnected"; };
+class Reader{
+public:
+    bool init_vmm();
+    bool init_local();
+    bool ready() const { return ready_.load(); }
+    // ACE_NATIVE_JOINT_INTEGRATION_V1: actual route fact; no vendor call.
+    bool dma_read_ready() const noexcept {return ready_.load(std::memory_order_acquire)&&via_vmm_.load(std::memory_order_acquire)&&target_pid_.load(std::memory_order_acquire)!=0;}
+    u64 attachment_epoch() const noexcept {return attachment_epoch_.load(std::memory_order_acquire);}
+    void invalidate_attachment_epoch() noexcept {attachment_epoch_.store(0,std::memory_order_release);}
+    // Binding owner only, while the entity reader is stopped and after layout
+    // validation. Sequence saturation fails closed instead of reusing an epoch.
+    bool publish_attachment_epoch() noexcept {
+        invalidate_attachment_epoch();if(!dma_read_ready())return false;
+        auto value=attachment_sequence_.load(std::memory_order_relaxed);
+        do{if(value==std::numeric_limits<u64>::max())return false;}
+        while(!attachment_sequence_.compare_exchange_weak(value,value+1,std::memory_order_acq_rel,std::memory_order_relaxed));
+        attachment_epoch_.store(value+1,std::memory_order_release);return true;
+    }
+    // No vendor calls or mutable status strings are accessed by this UI snapshot.
+    std::string diagnostics() const;
+    // Caller must stop/join the entity reader and finish other memory calls first.
+    void disconnect();
+    bool read(u64 addr,void* buf,u32 size);
+    bool refresh_caches();
+    bool read_batch(u64 addr,void* buf,u32 size);
+    // Real VMM scatter: valid/transferred is authoritative per request.
+    bool scatter(std::vector<DmaRead>& requests);
+    bool write(u64 addr,const void* buf,u32 size);
+    bool read_u32(u64 a,u32& o){ return read(a,&o,4); }
+    bool read_u64(u64 a,u64& o){ return read(a,&o,8); }
+    bool read_f32(u64 a,float& o){ return read(a,&o,4); }
+    bool read_hwid(std::string& out);
+    bool find_process(const GameModule& game);
+    DWORD process_id() const { return target_pid_.load(); }
+    bool refresh_process_list();bool refresh_process_modules();
+    u64 module_base(const char* name);
+    u64 find_pattern(u64 start,u64 size,const char* pattern,const char* mask);
+    std::atomic<u64> total_read_bytes{0};std::atomic<u32> read_errors{0};
+    std::atomic<u64> scalar_read_calls{0},scatter_calls{0},scatter_requests{0},requested_read_bytes{0};
+    MemStatus status;
+private:
+    static constexpr u64 unavailable=std::numeric_limits<u64>::max();
+    std::atomic<bool> ready_{false},via_vmm_{false};
+    std::atomic<u64> attachment_epoch_{0},attachment_sequence_{0};
+    std::atomic<DWORD> target_pid_{0};
+    std::atomic<u64> fpga_device_id_{unavailable},fpga_id_{unavailable},fpga_major_{unavailable},fpga_minor_{unavailable};
+    std::atomic<u64> vmm_major_{unavailable},vmm_minor_{unavailable},vmm_revision_{unavailable};
+    vmm_api::Handle vmm_=nullptr; HANDLE local_proc_=nullptr;
+    HMODULE vmm_dll_=nullptr;
+    dma_scatter::Session scatter_session_;
+    bool read_vmm(u64 a,void* b,u32 s);
+    bool read_local(u64 a,void* b,u32 s);
+    void* fn(const char* n){ return vmm_dll_?(void*)GetProcAddress(vmm_dll_,n):nullptr; }
+};
+extern Reader mem;
+:::ENDFILE
+:::FILE offsets.h
+#pragma once
+#include "utils.h"
+#include "game.h"
+#include <string>
+#include <mutex>
+#include <atomic>
+enum class AttachPhase{Idle,FindingProcess,FindingModules,Validating,Ready,UpdateRequired,Error};
+struct Offsets{
+    GameModule* g=nullptr;u64 game_base=0,game_size=0,entity_list=0,view_matrix=0,local_ent=0;u32 bound_pid=0;
+    std::atomic<bool> resolved{false};std::string report="not attached";mutable std::mutex mutex;
+    bool resolve(GameModule* game);bool validate();
+    void invalidate(const std::string& reason);
+    std::string status_text()const{std::lock_guard<std::mutex> lock(mutex);return report;}
+    AttachPhase phase()const{std::lock_guard<std::mutex> lock(mutex);return phase_;}
+private:
+    AttachPhase phase_=AttachPhase::Idle;std::mutex operation_mutex_;
+    void report_status(AttachPhase phase,const std::string& message);
+};
+extern Offsets off;
+:::ENDFILE
+:::FILE offsets.cpp
+#include "offsets.h"
+#include "dma.h"
+#include "live_backend.h"
+#include "deadlock_layout.h"
+#include "pe_header_check.h"
+Offsets off;
+void Offsets::report_status(AttachPhase phase,const std::string& message){
+    {std::lock_guard<std::mutex> lock(mutex);phase_=phase;report=message;}
+    plat_stage("attach",message);
+}
+bool Offsets::validate(){
+    // Copy state under the status lock; never hold it across a vendor call.
+    u64 base=0;u32 pid=0;{std::lock_guard<std::mutex> lock(mutex);base=game_base;pid=bound_pid;}
+    if(!base||pid!=mem.process_id()||(mem.dma_read_ready()&&!mem.attachment_epoch()))return false; // ACE_NATIVE_JOINT_INTEGRATION_V1
+    const auto probe=pe_header_check::inspect(base,{dl_layout::client_timestamp,dl_layout::client_image_size},[&](u64 address,void* bytes,u32 size){return mem.read(address,bytes,size);});
+    if(!probe.ready())plat_log("PE revalidation: PID=%lu %s",(unsigned long)pid,pe_header_check::describe("client.dll",probe).c_str());
+    return probe.ready();
+}
+void Offsets::invalidate(const std::string& reason){
+    mem.invalidate_attachment_epoch();snap.native_binding_epoch=0;snap.frame_valid=false;
+    bool changed=false;{std::lock_guard<std::mutex> lock(mutex);changed=resolved.load()||report!=reason;resolved=false;report=reason;phase_=AttachPhase::Error;}
+    if(changed){plat_log("Game layout invalidated: %s",reason.c_str());plat_stage("attach",std::string("awaiting retry: ")+reason);}
+}
+bool Offsets::resolve(GameModule* game){
+    std::lock_guard<std::mutex> operation(operation_mutex_);
+    if(entity_reader_active()){report_status(AttachPhase::Error,"Attachment requires the entity reader to be stopped");return false;}
+    mem.invalidate_attachment_epoch();snap.native_binding_epoch=0;snap.frame_valid=false;
+    {std::lock_guard<std::mutex> lock(mutex);resolved=false;g=game;game_base=game_size=entity_list=view_matrix=local_ent=0;bound_pid=0;}
+    auto fail=[&](AttachPhase phase,const std::string& detail){report_status(phase,detail);plat_log("Game attach failed: %s",detail.c_str());return false;};
+    report_status(AttachPhase::FindingProcess,"Locating game process");
+    if(game!=&games::DEADLOCK)return fail(AttachPhase::Error,"This game has no live backend");
+    if(!mem.find_process(*game))return fail(AttachPhase::Error,"Deadlock process not found after process-list refresh");
+    DWORD pid=mem.process_id();report_status(AttachPhase::FindingModules,"Locating required game modules");
+    auto modules=[&](){return live_backend::Binding{mem.module_base("client.dll"),mem.module_base("engine2.dll"),mem.module_base("inputsystem.dll")};};
+    auto binding=modules();if((!binding.client||!binding.engine||!binding.input)&&mem.refresh_process_modules())binding=modules();
+    plat_log("Game modules: PID=%lu client=0x%llX engine2=0x%llX inputsystem=0x%llX",(unsigned long)pid,(unsigned long long)binding.client,(unsigned long long)binding.engine,(unsigned long long)binding.input);
+    if(!binding.client||!binding.engine||!binding.input){std::string missing;if(!binding.client)missing+="client.dll ";if(!binding.engine)missing+="engine2.dll ";if(!binding.input)missing+="inputsystem.dll ";return fail(AttachPhase::Error,"Required modules unavailable: "+missing+"(PID "+std::to_string(pid)+")");}
+    report_status(AttachPhase::Validating,"Validating Deadlock build and layout");
+    plat_log("Layout source: compiled revision %u; module bases discovered at runtime; schema/field discovery not implemented",dl_layout::revision);
+    auto failure_phase=[&](const std::string& detail){return (detail.find("build mismatch")!=std::string::npos||detail.find("global layout mismatch")!=std::string::npos)?AttachPhase::UpdateRequired:AttachPhase::Error;};
+    std::string detail;bool metadata_failure=false;
+    if(!live_backend::live.bind(binding,detail,&metadata_failure)){
+        if(!metadata_failure)return fail(failure_phase(detail),detail);
+        // Startup loader has no reader; overlay recovery joins it before resolve.
+        // Never refresh/reselect beneath a running reader or continue on old data.
+        if(entity_reader_active())return fail(AttachPhase::Error,"PE metadata recovery requires the reader to be stopped: "+detail);
+        plat_log("PE metadata recovery: one bounded refresh after PID=%lu %s",(unsigned long)pid,detail.c_str());
+        report_status(AttachPhase::FindingProcess,"Refreshing process/module metadata after PE failure");
+        const bool caches=mem.refresh_caches(),processes=mem.refresh_process_list();
+        plat_log("PE recovery refresh: memory/TLB=%s process_list=%s",caches?"complete":"unavailable",processes?"complete":"unavailable");
+        if(!mem.find_process(*game))return fail(AttachPhase::Error,"PE recovery: game process unavailable after refresh");
+        pid=mem.process_id();const bool process=mem.refresh_process_modules();binding=modules();
+        plat_log("PE recovery modules: PID=%lu process_refresh=%s client=0x%llX engine2=0x%llX inputsystem=0x%llX",(unsigned long)pid,process?"complete":"unavailable",(unsigned long long)binding.client,(unsigned long long)binding.engine,(unsigned long long)binding.input);
+        if(!binding.client||!binding.engine||!binding.input)return fail(AttachPhase::Error,"PE recovery: required modules unavailable after fresh lookup (PID "+std::to_string(pid)+")");
+        report_status(AttachPhase::Validating,"Revalidating all modules and layout after fresh lookup");
+        if(!live_backend::live.bind(binding,detail))return fail(failure_phase(detail),"After one metadata retry: "+detail);
+    }
+    if(mem.process_id()!=pid){live_backend::live.reset();return fail(AttachPhase::Error,"Game process changed during attachment; retry required");}
+    if(mem.dma_read_ready()&&!mem.publish_attachment_epoch()){live_backend::live.reset();return fail(AttachPhase::Error,"Could not publish a unique DMA attachment epoch");}
+    {std::lock_guard<std::mutex> lock(mutex);game_base=binding.client;game_size=dl_layout::client_image_size;entity_list=game_base+dl_layout::entities_rva;view_matrix=game_base+dl_layout::view_rva;bound_pid=pid;phase_=AttachPhase::Ready;report="Layout validated; waiting for live snapshots";resolved=true;}
+    SYSTEMTIME attached{};GetSystemTime(&attached);plat_log("Game attachment observed: %04u-%02u-%02u %02u:%02u:%02u UTC (attachment time, not game process creation time)",attached.wYear,attached.wMonth,attached.wDay,attached.wHour,attached.wMinute,attached.wSecond);
+    plat_log("Layout matched: Deadlock revision %u, PID=%lu; waiting for validated snapshots",dl_layout::revision,(unsigned long)pid);plat_stage("attach","layout ready");return true;
+}
+:::ENDFILE
+:::FILE entities.h
+#pragma once
+#include "utils.h"
+#include "action_pause_policy.h"
+#include "prediction.h"
+#include "profile_subject.h"
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include <array>
+#include <string>
+enum class EClass{ Player=0, Deployable, NPC, World, Projectile };
+struct Ability{
+    prediction::Shot shot;
+    u64 base=0;u32 handle=0,token=0;int16_t slot=-1;int charges=0;
+    bool valid=false,ready=false,casting=false,channeling=false,trained=false;
+    float cooldown_end=0,cast_start=0,channel_start=0,completed=0,impact_time=0;
+    u32 upgrade_bits=0;std::vector<u32> imbued_tokens;bool imbued_valid=false;bool active_reload_failed=false;int melee_state=0,melee_type=0;float melee_state_start=0;bool melee_valid=false;std::vector<u32> targets;std::string type;
+    Vec3 impact_position{};bool has_impact_position=false;
+};
+struct Entity{
+    profile_subject::Subject settings_subject;std::string display_name;
+    // ACE_NATIVE_JOINT_INTEGRATION_V1: independently validated native WORLD joints.
+    struct NativeJoints{std::array<Vec3,2> world{};std::array<int,2> model_index{-1,-1};u64 binding_epoch=0,started_ms=0,completed_ms=0;unsigned valid_mask=0;} native_joints;
+    prediction::Shot primary_shot,current_shot;u32 selected_ability=0;
+    u64 base=0; u32 idx=0, team=0, hero=0;
+    u64 host_sample_ms=0; // Original actor/header acquisition; never refreshed by later joint work.
+    EClass cls=EClass::Player;
+    Vec3 pos, vel; float hp=0, max_hp=0; bool alive=false;
+    // valid is identity/pose; health fields and alive knowledge are independent.
+    bool health_current_valid=false,health_max_valid=false,health_pair_valid=false,life_state_valid=false,alive_valid=false;
+    bool visible=false, execute_eligible=false, stealthed=false, invuln=false;
+    float soul_diff=0; u64 souls=0; u64 steam_id=0;
+    float windup_pct=0; bool melee_windup=false; bool ult_ready=false; bool casting=false;
+    u64 visible_since=0,last_seen=0,owner=0;u32 handle=0,ability_token=0;
+    bool disarmed=false,reloading=true,weapon_valid=false,active_reload_allowed=false;float reload_begin=0,reload_end=0,reload_pause=0,reload_fraction=0,reload_width=0;std::vector<u32> removable_debuffs;
+    bool world_obstacle=false;float scale=1;bool bullet_invuln=false,team_visible=false,occlusion_valid=false;std::array<bool,7> bone_visible{};
+    bool public_ultimate_valid=false,public_ultimate_trained=false;float public_ultimate_cooldown_start=0,public_ultimate_cooldown_end=0,public_ultimate_stopped_remaining=0;u64 public_ultimate_sample_ms=0;
+    bool charging=false;bool valid=false,visibility_known=false,abilities_valid=false,modifiers_valid=false,ability_blocked=false;
+    Vec3 bounds_min{-16,-16,0},bounds_max{16,16,72},facing{};bool bounds_valid=false;float collision_radius=0;std::string type_name;std::vector<Ability> abilities;
+};
+struct Snapshots{
+    std::atomic<bool> backend_managed{false},overlay_menu{false},frame_valid{false},action_valid{false},input_valid{false},visibility_valid{false};
+    std::array<bool,256> game_keys{};float game_time=0;std::string backend_status="not attached";
+    unsigned entity_count=0;Vec3 camera{};bool camera_valid=false;float sensitivity=0,fov_sensitivity=1;std::string game_id;u32 game_revision=0;std::atomic<float> units_per_metre{0};std::string map_name,map_status="Automatic map detection has not sampled yet";Entity local;
+    std::vector<Entity> enemies, friendlies, npcs, world, projectiles;
+    float view[16]={};
+    std::atomic<bool> in_match{false};
+    std::atomic<bool> dead{true};
+    std::atomic<bool> local_alive_valid{false};
+    // Legacy in_menu is the raw engine UI mask candidate, not proven Escape visibility.
+    std::atomic<bool> in_menu{false};
+    std::atomic<unsigned> raw_ui_flags{0},raw_input_enabled{0};
+    std::atomic<bool> raw_ui_valid{false},raw_input_enabled_valid{false};
+    std::atomic<bool> in_scoreboard{false};
+    std::atomic<bool> spectating{false};
+    std::atomic<u64> last_read_ms{0};
+    std::atomic<u64> native_binding_epoch{0};
+    // Matrix timestamp records host acquisition, not proof that the
+    // target updated the matrix. change_ms is diagnostic only.
+    std::atomic<u64> matrix_sample_ms{0},matrix_change_ms{0};
+    std::atomic<int> read_hz{0};std::atomic<float> read_hz_exact{0};
+    std::atomic<u64> poll_ms{0},publish_ms{0},scan_ms{0},maintenance_ms{0},wait_ms{0},iteration_ms{0};
+    std::atomic<u64> discovery_completed_ms{0},discovery_interval_ms{0};
+    std::atomic<unsigned> discovery_pages_read{0},discovery_pages_unavailable{0},discovery_accepted{0},discovery_pawns{0},discovery_controllers{0};
+};
+extern Snapshots snap;
+extern std::mutex snap_mtx;
+const char* hero_name_by_id(u32 id);
+void request_entity_rescan();void request_recache();std::string recache_status();
+bool consume_attach_recovery();bool entity_reader_active();
+void entity_thread_start();void entity_thread_stop();
+bool game_key_state(int virtual_key,bool& held);bool game_key_down(int virtual_key);
+action_pause_policy::Preferences configured_action_pause_preferences();
+bool game_ui_pause_active();bool ace_menu_pause_active();bool game_data_permits_output();
+std::string backend_status();std::string game_output_reason();std::string map_detection_status();
+Vec2 world_to_screen(Vec3 w,u64 sw,u64 sh);
+:::ENDFILE
+:::FILE entities.cpp
+#include "entities.h"
+#include "dma.h"
+#include "hero_catalog.h"
+#include "live_backend.h"
+#include "offsets.h"
+#include "config.h"
+#include "input.h"
+#include "collision.h"
+#include "visibility_cache.h"
+#include "target_geometry.h"
+#include "native_target.h"
+#include "profile_scope.h"
+#include "world_units.h"
+#include "game.h"
+// ACE_NATIVE_JOINT_INTEGRATION_V1 (existing admission loop remains unchanged)
+#include <algorithm>
+#include <windows.h>
+#include <thread>
+#include <chrono>
+Snapshots snap;std::mutex snap_mtx;
+static std::atomic<bool> refresh_requested{false},rescan_requested{false};static std::mutex refresh_mutex;static std::string refresh_message="Game data has not been manually refreshed";
+void request_entity_rescan(){snap.frame_valid=false;rescan_requested=true;std::lock_guard<std::mutex> lock(refresh_mutex);refresh_message=off.resolved?"Entity rescan requested":"Entity rescan queued until game attaches";plat_log("Recovery: %s",refresh_message.c_str());}
+void request_recache(){snap.frame_valid=false;refresh_requested=true;std::lock_guard<std::mutex> lock(refresh_mutex);refresh_message=off.resolved?"Memory cache refresh requested":"Memory refresh queued until game attaches";plat_log("Recovery: %s",refresh_message.c_str());}
+std::string recache_status(){std::lock_guard<std::mutex> lock(refresh_mutex);return refresh_message;}
+static std::atomic<bool> reader_running{false};static std::thread reader_thread;
+bool entity_reader_active(){return reader_running.load();}
+bool consume_attach_recovery(){
+    // Only the DMA owner calls this after joining the reader. Keep queued commands
+    // available until the device is ready, even when attachment never succeeded.
+    if(!mem.ready()||off.resolved||entity_reader_active())return false;
+    bool refresh=refresh_requested.exchange(false),rescan=rescan_requested.exchange(false);if(!refresh&&!rescan)return false;
+    plat_stage("attach","processing queued recovery");bool refreshed=!refresh||mem.refresh_caches();live_backend::live.recache();
+    std::string message=refresh?(refreshed?"Memory caches refreshed; retrying game attachment":"Cache refresh unavailable; retrying game attachment"):"Retrying process and module discovery";
+    {std::lock_guard<std::mutex> lock(refresh_mutex);refresh_message=message;}plat_log("Recovery: %s",message.c_str());return true;
+}
+
+const char* hero_name_by_id(u32 id){return current_hero_name(id);}
+bool game_key_state(int key,bool& held){
+    held=false;if(key<1||key>255)return false;
+    if(!snap.backend_managed){held=(GetAsyncKeyState(key)&0x8000)!=0;return true;}
+    if(key==VK_LBUTTON||key==VK_RBUTTON||key==VK_MBUTTON||key==VK_XBUTTON1||key==VK_XBUTTON2)return hw::physical_mouse_state(key,held);
+    std::lock_guard<std::mutex> lock(snap_mtx);if(!snap.input_valid||now_ms()-snap.last_read_ms.load()>250)return false;held=snap.game_keys[key];return true;
+}
+bool game_key_down(int key){bool held=false;return game_key_state(key,held)&&held;}
+// Historical helper name retained for callers; this is only an explicit diagnostic pause.
+bool game_ui_pause_active(){return action_pause_policy::diagnostic_pause(cfg.B(action_pause_policy::diagnostic_key),snap.raw_ui_valid.load(),snap.raw_ui_flags.load());}
+bool ace_menu_pause_active(){return action_pause_policy::ace_pause(cfg.B("input.disable_in_overlay"),snap.overlay_menu.load());}
+action_pause_policy::Preferences configured_action_pause_preferences(){
+    action_pause_policy::Preferences p;
+    p.pause_in_ace_menu=cfg.B("input.disable_in_overlay");
+    p.pause_when_dead=cfg.B("input.disable_when_dead");
+    p.pause_in_scoreboard=cfg.B("input.disable_in_scoreboard");
+    p.pause_when_spectator=cfg.B("input.disable_when_spectator");
+    p.diagnostic_raw_ui=cfg.B(action_pause_policy::diagnostic_key);
+    return p;
+}
+static action_pause_policy::Reason current_action_gate(){
+    action_pause_policy::Observations s;
+    const auto at=snap.last_read_ms.load(),now=now_ms();
+    s.managed=snap.backend_managed;s.snapshot_valid=snap.frame_valid&&snap.action_valid;s.input_valid=snap.input_valid;
+    s.fresh=at&&now>=at&&now-at<=250;s.in_match=snap.in_match;
+    s.life_known=snap.local_alive_valid;s.dead=snap.dead;
+    s.scoreboard=snap.in_scoreboard;s.spectator=snap.spectating;
+    s.raw_ui_readable=snap.raw_ui_valid;s.raw_ui_flags=snap.raw_ui_flags;
+    s.ace_menu_open=snap.overlay_menu;
+    return action_pause_policy::evaluate(configured_action_pause_preferences(),s);
+}
+bool game_data_permits_output(){return current_action_gate()==action_pause_policy::Reason::Ready;}
+std::string game_output_reason(){
+    const auto reason=current_action_gate();
+    if(!snap.backend_managed&&reason==action_pause_policy::Reason::Ready)return "standalone";
+    return action_pause_policy::reason_text(reason);
+}
+std::string backend_status(){std::lock_guard<std::mutex> lock(snap_mtx);return snap.backend_status;}
+std::string map_detection_status(){std::lock_guard<std::mutex> lock(snap_mtx);return snap.map_status;}
+static void publish(live_backend::Frame&& f){
+    // Never publish a completed old-binding acquisition into a replacement.
+    if(f.native_binding_epoch&&f.native_binding_epoch!=mem.attachment_epoch()){
+        live_backend::Frame empty;empty.time=f.time;empty.status="Attachment changed before publication";f=std::move(empty);
+    }
+    if(f.attached&&(!games::selected||!games::selected->cfg_prefix||f.game_id!=games::selected->cfg_prefix)){
+        const auto sampled=f.time;f={};f.time=sampled;f.status="Backend game identity does not match the selected game";
+    }
+    world_units::set_scale(f.attached?f.world_units_per_metre:0);
+    const bool visuals_ready=f.visuals_ready();
+    std::string map=f.game_id=="deadlock"?(cfg.I("system.map")==1?"dl_midtown":(cfg.I("system.map")==2?"hero_testing":f.map_name)):f.map_name;{std::lock_guard<std::mutex> lock(snap_mtx);if(snap.map_name!=map)snap.frame_valid=false;}collision::select_map(collision::GameMapKey{f.game_id,map,f.game_revision});
+    std::vector<collision::Obstacle> obstacles;for(const auto& entity:f.world)if(entity.world_obstacle)obstacles.push_back({entity.pos,entity.bounds_min,entity.bounds_max,entity.facing,entity.scale});collision::set_obstacles(std::move(obstacles));
+    Vec3 camera;bool camera_valid=f.matrix_valid&&collision::camera_origin(f.view.data(),camera);
+    static std::map<u32,std::pair<u64,u64>> visible_times;
+    for(auto it=visible_times.begin();it!=visible_times.end();)if(f.time-it->second.second>500)it=visible_times.erase(it);else ++it;
+    static visibility_cache::Rays visibility_rays;
+    const auto collision_revision=collision::revision();
+    if(!camera_valid)visibility_rays.clear();
+    auto ray_visibility=[&](Vec3 point){
+        visibility_cache::Answer answer;
+        if(!camera_valid||!visibility_cache::same(collision::revision(),collision_revision))return answer;
+        constexpr unsigned channels=collision::Vision|collision::Bullet;const u64 sampled=now_ms();
+        if(!visibility_rays.find(camera,point,collision_revision,channels,sampled,answer)){
+            auto ray=collision::trace_any(camera,point,channels);answer={ray.known,ray.clear};
+            if(!visibility_cache::same(collision::revision(),collision_revision))return visibility_cache::Answer{};
+            visibility_rays.remember(camera,point,collision_revision,channels,sampled,answer);
+        }else if(!visibility_cache::same(collision::revision(),collision_revision))return visibility_cache::Answer{};
+        return answer;
+    };
+    auto visibility=[&](std::vector<Entity>& targets,bool allied,bool npc){for(auto& e:targets){
+        const bool team_known=npc||allied||e.visibility_known;e.team_visible=npc||allied?true:e.visible;e.bone_visible.fill(false);
+        // Team FOW can reject a target. A positive FOW flag never proves local LOS.
+        if(!camera_valid||!team_known||!e.team_visible){
+            e.occlusion_valid=false;e.visible=false;e.visibility_known=team_known&&!e.team_visible;visible_times.erase(e.handle);continue;
+        }
+        bool any=false,on_screen=false,known=true;
+        for(int i=0;i<7;i++){
+            Vec3 point;if(!target_geometry::region(e,i,point)){known=false;continue;}
+            float w=point.x*f.view[12]+point.y*f.view[13]+point.z*f.view[14]+f.view[15];
+            if(std::isfinite(w)&&w>.01f){float x=(point.x*f.view[0]+point.y*f.view[1]+point.z*f.view[2]+f.view[3])/w,y=(point.x*f.view[4]+point.y*f.view[5]+point.z*f.view[6]+f.view[7])/w;on_screen|=std::isfinite(x)&&std::isfinite(y)&&std::fabs(x)<=1&&std::fabs(y)<=1;}
+            // Offscreen is not an occluder. Helpers may need LOS behind the view.
+            auto ray=ray_visibility(point);known&=ray.known;e.bone_visible[i]=ray.known&&ray.clear;any|=e.bone_visible[i];
+        }
+        e.occlusion_valid=known;e.visible=e.team_visible&&any;e.visibility_known=team_known&&known;
+        if(e.visible&&on_screen){auto& times=visible_times[e.handle];if(!times.first||f.time-times.second>250)times.first=f.time;times.second=f.time;e.visible_since=times.first;}else visible_times.erase(e.handle);
+    }};visibility(f.enemies,false,false);visibility(f.friendlies,true,false);
+    {profile_scope::ActiveScope hero_settings(f.local);if(native_target::supports_entity(EClass::NPC)&&(cfg.B("aim.target_minions")||cfg.B("aim.target_neutrals")))visibility(f.npcs,false,true);}
+    if(!visibility_cache::same(collision::revision(),collision_revision)){
+        visibility_rays.clear();auto invalidate=[&](std::vector<Entity>& values){for(auto& e:values){e.visible=e.visibility_known=e.occlusion_valid=false;e.bone_visible.fill(false);visible_times.erase(e.handle);}};
+        invalidate(f.enemies);invalidate(f.friendlies);invalidate(f.npcs);
+    }
+    std::lock_guard<std::mutex> lock(snap_mtx);
+    if(f.native_binding_epoch&&f.native_binding_epoch!=mem.attachment_epoch()){snap.native_binding_epoch=0;snap.frame_valid=false;snap.backend_status="Attachment changed before publication";return;}
+    snap.game_id=f.game_id;snap.game_revision=f.game_revision;snap.units_per_metre=f.world_units_per_metre;snap.action_valid=f.actions_ready();snap.camera=camera;snap.camera_valid=camera_valid;snap.map_name=map;snap.map_status=f.map_status;snap.sensitivity=f.sensitivity;snap.fov_sensitivity=f.fov_sensitivity;snap.local=std::move(f.local);snap.enemies=std::move(f.enemies);snap.friendlies=std::move(f.friendlies);
+    snap.npcs=std::move(f.npcs);snap.world=std::move(f.world);snap.projectiles=std::move(f.projectiles);
+    std::copy(f.view.begin(),f.view.end(),snap.view);snap.native_binding_epoch=f.native_binding_epoch;snap.matrix_sample_ms=f.matrix_sample_ms;snap.matrix_change_ms=f.matrix_change_ms;snap.game_keys=f.keys;snap.input_valid=f.input_valid;snap.visibility_valid=f.visibility_valid;
+    snap.game_time=f.game_time;snap.backend_status=f.status;snap.entity_count=f.entities;
+    snap.discovery_completed_ms=f.discovery.completed_ms;snap.discovery_interval_ms=f.discovery.interval_ms;snap.discovery_pages_read=f.discovery.pages_read;snap.discovery_pages_unavailable=f.discovery.pages_unavailable;snap.discovery_accepted=f.discovery.accepted;snap.discovery_pawns=f.discovery.pawns;snap.discovery_controllers=f.discovery.controllers;
+    snap.in_match=f.in_match;snap.local_alive_valid=snap.local.alive_valid;snap.dead=f.dead;snap.in_menu=f.menu;snap.raw_ui_flags=f.performance.raw_ui_flags;snap.raw_ui_valid=f.ui_valid;snap.raw_input_enabled=f.performance.raw_input_enabled;snap.raw_input_enabled_valid=f.performance.raw_input_enabled_valid;snap.in_scoreboard=f.scoreboard;snap.spectating=f.spectating;
+    snap.last_read_ms=f.time;snap.frame_valid=visuals_ready; // Input validity gates actions separately, not visual data.
+}
+void entity_thread_start(){
+    if(reader_running.exchange(true))return;
+    world_units::set_scale(0);snap.action_valid=false;snap.read_hz=0;snap.read_hz_exact=0;snap.poll_ms=0;snap.publish_ms=0;snap.scan_ms=0;snap.discovery_completed_ms=0;snap.discovery_interval_ms=0;snap.discovery_pages_read=0;snap.discovery_pages_unavailable=0;snap.discovery_accepted=0;snap.discovery_pawns=0;snap.discovery_controllers=0;
+    if(reader_thread.joinable())reader_thread.join();snap.backend_managed=true;
+    plat_log("Reader settings: limit=%d Hz, discovery=%d ms, world=%d ms",cfg.I("reader.max_hz"),cfg.I("reader.discovery_ms"),cfg.I("reader.world_ms"));    plat_stage("reader","starting");reader_thread=std::thread([]{u64 rate_start=now_ms();unsigned rate_count=0;u64 previous_start=0,cadence_sum=0,cadence_count=0,cadence_min=UINT64_MAX,cadence_max=0;std::string previous_gate_report;u64 gate_reported_at=0;std::array<u64,5> stage_sums{},stage_maxima{};u64 completed_cycles=0;while(reader_running){const auto iteration_started=std::chrono::steady_clock::now();auto start=now_ms();if(previous_start){const auto period=start-previous_start;snap.iteration_ms=period;cadence_sum+=period;++cadence_count;cadence_min=std::min(cadence_min,period);cadence_max=std::max(cadence_max,period);}previous_start=start;live_backend::Frame frame;
+        if(rescan_requested.exchange(false)){plat_stage("reader","rescanning identities",false);live_backend::live.recache();}
+        if(refresh_requested.exchange(false)){plat_stage("reader","refreshing memory caches",false);bool refreshed=mem.refresh_caches();live_backend::live.recache();std::lock_guard<std::mutex> lock(refresh_mutex);refresh_message=refreshed?"Memory caches refreshed; rebuilding entity data":"Memory refresh unavailable; rebuilding entity data";}
+        plat_stage("reader","validating layout",false);static u64 checked=0;if(off.resolved&&now_ms()-checked>1000){checked=now_ms();if(!off.validate())off.invalidate("Live layout validation lost; waiting for game reattachment");}
+        if(off.resolved){plat_stage("reader","reading game snapshot",false);frame=live_backend::live.poll(cfg.I("system.scoreboard_key"));}else{frame.time=now_ms();frame.status=off.status_text();}
+        snap.poll_ms=now_ms()-start;
+        static std::string previous_status;std::string state=frame.status+" | local="+std::to_string(frame.local.valid)+" matrix="+std::to_string(frame.matrix_valid)+" clock="+std::to_string(frame.clock_valid)+" keys="+std::to_string(frame.input_valid)+" visibility="+std::to_string(frame.visibility_valid);
+        if(state!=previous_status){plat_log("Snapshot state: %s | identities=%u enemies=%u allies=%u world=%u",state.c_str(),frame.entities,(unsigned)frame.enemies.size(),(unsigned)frame.friendlies.size(),(unsigned)frame.world.size());previous_status=state;}
+        plat_stage("reader","publishing snapshot and collision",false);if(frame.scan_ms)snap.scan_ms=frame.scan_ms;u64 publish_start=now_ms();publish(std::move(frame));snap.publish_ms=now_ms()-publish_start;rate_count++;u64 rate_elapsed=now_ms()-rate_start;if(rate_elapsed>=1000){snap.read_hz_exact=rate_count*1000.f/rate_elapsed;snap.read_hz=(int)snap.read_hz_exact.load();rate_start=now_ms();rate_count=0;}
+        char gate_line[768];const auto ui=snap.raw_ui_flags.load(),input=snap.raw_input_enabled.load();
+        snprintf(gate_line,sizeof(gate_line),"Action gate: reason=%s | ui_byte=0x%02X ui_readable=%d bit0=%u bit1=%u raw_signal=%d input_enable_byte=0x%02X input_readable=%d pause_raw_ui_diagnostic=%d ACE_menu_open=%d pause_ACE_menu=%d dead=%d life_known=%d pause_dead=%d scoreboard=%d pause_scoreboard=%d spectator=%d pause_spectator=%d",game_output_reason().c_str(),ui,snap.raw_ui_valid.load(),ui&1,(ui>>1)&1,action_pause_policy::raw_signal_active(snap.raw_ui_valid.load(),ui),input,snap.raw_input_enabled_valid.load(),cfg.B(action_pause_policy::diagnostic_key),snap.overlay_menu.load(),cfg.B("input.disable_in_overlay"),snap.dead.load(),snap.local_alive_valid.load(),cfg.B("input.disable_when_dead"),snap.in_scoreboard.load(),cfg.B("input.disable_in_scoreboard"),snap.spectating.load(),cfg.B("input.disable_when_spectator"));
+        const auto gate_now=now_ms();if(previous_gate_report!=gate_line&&(!gate_reported_at||gate_now-gate_reported_at>=500)){plat_log("%s",gate_line);previous_gate_report=gate_line;gate_reported_at=gate_now;}
+        static u64 last_timing_log=0;if(now_ms()-last_timing_log>=10000){last_timing_log=now_ms();
+            if(completed_cycles){plat_log("Reader loop budget: cycles=%llu average_ms poll=%.2f publish=%.2f maintenance=%.2f wait=%.2f other=%.2f | maximum_ms poll=%llu publish=%llu maintenance=%llu wait=%llu other=%llu",(unsigned long long)completed_cycles,(double)stage_sums[0]/completed_cycles,(double)stage_sums[1]/completed_cycles,(double)stage_sums[2]/completed_cycles,(double)stage_sums[3]/completed_cycles,(double)stage_sums[4]/completed_cycles,(unsigned long long)stage_maxima[0],(unsigned long long)stage_maxima[1],(unsigned long long)stage_maxima[2],(unsigned long long)stage_maxima[3],(unsigned long long)stage_maxima[4]);stage_sums.fill(0);stage_maxima.fill(0);completed_cycles=0;}
+            // Host request counters only. VMM may fetch more physical bytes per
+            // request; this does not claim measured PCIe bandwidth/utilization.
+            static u64 io_at=0,io_bytes=0,io_scalar=0,io_batches=0,io_requests=0,io_requested_bytes=0;
+            const u64 at=now_ms(),bytes=mem.total_read_bytes.load(),scalar=mem.scalar_read_calls.load(),batches=mem.scatter_calls.load(),requests=mem.scatter_requests.load(),requested_bytes=mem.requested_read_bytes.load();
+            if(io_at&&at>io_at&&bytes>=io_bytes&&scalar>=io_scalar&&batches>=io_batches&&requests>=io_requests&&requested_bytes>=io_requested_bytes){const double seconds=(at-io_at)*.001;
+                plat_log("Reader I/O rates: valid_bytes/s=%.0f scalar_calls/s=%.1f scatter_calls/s=%.1f scatter_requests/s=%.1f requested_host_bytes/s=%.0f",(bytes-io_bytes)/seconds,(scalar-io_scalar)/seconds,(batches-io_batches)/seconds,(requests-io_requests)/seconds,(requested_bytes-io_requested_bytes)/seconds);
+            }
+            io_at=at;io_bytes=bytes;io_scalar=scalar;io_batches=batches;io_requests=requests;io_requested_bytes=requested_bytes;plat_log("Reader cadence: configured_cap=%d Hz period_avg=%.2f ms period_min=%llu ms period_max=%llu ms last_maintenance=%llu ms last_wait=%llu ms",std::clamp(cfg.I("reader.max_hz"),30,500),cadence_count?(double)cadence_sum/cadence_count:0.,(unsigned long long)(cadence_count?cadence_min:0),(unsigned long long)cadence_max,(unsigned long long)snap.maintenance_ms.load(),(unsigned long long)snap.wait_ms.load());cadence_sum=cadence_count=cadence_max=0;cadence_min=UINT64_MAX;plat_log("Reader timing: %.2f Hz, poll %llu ms, publish %llu ms, last scan %llu ms, data age %llu ms, matrix host age %lld ms, matrix unchanged %lld ms",(double)snap.read_hz_exact.load(),(unsigned long long)snap.poll_ms.load(),(unsigned long long)snap.publish_ms.load(),(unsigned long long)snap.scan_ms.load(),(unsigned long long)(now_ms()-snap.last_read_ms.load()),(snap.matrix_sample_ms.load()?(long long)(now_ms()-snap.matrix_sample_ms.load()):-1LL),(snap.matrix_change_ms.load()?(long long)(now_ms()-snap.matrix_change_ms.load()):-1LL));}
+        const auto maintenance_ms=off.resolved&&reader_running?live_backend::live.maintenance():0;snap.maintenance_ms=maintenance_ms;if(maintenance_ms)snap.scan_ms=maintenance_ms;
+        plat_stage("reader","waiting for next update",false);auto deadline=iteration_started+std::chrono::microseconds(1000000/std::clamp(cfg.I("reader.max_hz"),30,500));const auto wait_started=now_ms();if(std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_until(deadline);snap.wait_ms=now_ms()-wait_started;
+        const std::array<u64,4> elapsed_stages{snap.poll_ms.load(),snap.publish_ms.load(),maintenance_ms,snap.wait_ms.load()};u64 accounted=0;
+        for(std::size_t i=0;i<elapsed_stages.size();++i){stage_sums[i]+=elapsed_stages[i];stage_maxima[i]=std::max(stage_maxima[i],elapsed_stages[i]);accounted+=elapsed_stages[i];}
+        const auto elapsed=now_ms()-start,other=elapsed>accounted?elapsed-accounted:0;stage_sums[4]+=other;stage_maxima[4]=std::max(stage_maxima[4],other);++completed_cycles;
+    }});
+}
+void entity_thread_stop(){mem.invalidate_attachment_epoch();snap.native_binding_epoch=0;snap.frame_valid=false;bool was_running=reader_running.exchange(false);if(reader_thread.joinable())reader_thread.join();snap.read_hz=0;snap.read_hz_exact=0;snap.poll_ms=0;snap.publish_ms=0;snap.scan_ms=0;snap.discovery_completed_ms=0;snap.discovery_interval_ms=0;snap.discovery_pages_read=0;snap.discovery_pages_unavailable=0;snap.discovery_accepted=0;snap.discovery_pawns=0;snap.discovery_controllers=0;if(!was_running)return;live_backend::Frame empty;empty.time=now_ms();empty.status="Reader stopped";publish(std::move(empty));}
+Vec2 world_to_screen(Vec3 point,u64 width,u64 height){
+    float m[16];{std::lock_guard<std::mutex> guard(snap_mtx);std::copy(std::begin(snap.view),std::end(snap.view),m);}
+    float w=point.x*m[12]+point.y*m[13]+point.z*m[14]+m[15];if(!std::isfinite(w)||w<.01f)return {-99999,-99999};
+    float x=point.x*m[0]+point.y*m[1]+point.z*m[2]+m[3],y=point.x*m[4]+point.y*m[5]+point.z*m[6]+m[7];
+    if(!std::isfinite(x)||!std::isfinite(y))return {-99999,-99999};return {(float)width*.5f*(1+x/w),(float)height*.5f*(1-y/w)};
+}
+:::ENDFILE
+:::FILE input.h
+#pragma once
+#include "utils.h"
+#include <string>
+#include <atomic>
+struct InputState{
+    std::atomic<bool> device_ok{false},keyboard_ok{false},keyboard_api{false}; std::string device_text="disconnected";
+    int com_port=-1,baud_rate=0;
+    u64 last_user_input=0;
+    std::atomic<bool> panic{false};
+};
+extern InputState inp;
+namespace aim_model{struct Movement;}
+namespace hw{
+    Vec2 guided_move(Vec2 error,aim_model::Movement& state,u64 width,u64 height,float dt,bool magnet);
+    Vec2 screen_to_counts(Vec2 pixels,u64 width,u64 height,float dt=0,float max_turn=0);std::string test_connection();std::string test_mouse();std::string test_click();
+    bool can_send(int key);std::string test_keyboard();void update_diagnostics();std::string keyboard_status();
+    std::string diagnostic_summary();bool physical_mouse_state(int virtual_key,bool& held);std::string physical_mouse_status();
+    bool init();
+    void mouse_move(int dx,int dy);
+    void mouse_down(int b);
+    void mouse_up(int b);
+    void mouse_click(int b,int ms);
+    void key_tap(int vk,int ms=30);
+    void reconnect();void disconnect();
+    bool key_chord(int modifier,int key,int ms=35);
+}
+:::ENDFILE
+:::FILE input.cpp
+#include "entities.h"
+#include "km_protocol.h"
+#include "input.h"
+#include "input_timing.h"
+#include "makcu_serial_parser.h"
+#include <array>
+#include <thread>
+#include <exception>
+#include "config.h"
+#include "aim_model.h"
+#include <windows.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+InputState inp;
+static std::recursive_mutex serial_mutex;
+static std::recursive_mutex connection_mutex;
+static HANDLE serial=INVALID_HANDLE_VALUE;static std::atomic<u64> serial_sent{0},serial_failed{0};
+static makcu_serial::Parser serial_parser;static bool serial_query_synchronized=false;static std::atomic<bool> device_is_makcu{false};static std::atomic<u64> seen_stream_events{0};
+static void stop_mouse_monitor();static void start_mouse_monitor();
+static bool open_port(int com,int baud=115200){
+    std::lock_guard<std::recursive_mutex> lock(serial_mutex);
+    serial_parser.reset();serial_query_synchronized=false;device_is_makcu=false;seen_stream_events=0;
+    char name[32]; snprintf(name,sizeof(name),"\\\\.\\COM%d",com);
+    plat_stage("input","opening COM"+std::to_string(com)+" at "+std::to_string(baud));
+    serial=CreateFileA(name,GENERIC_READ|GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+    if(serial==INVALID_HANDLE_VALUE){plat_log("COM%d at %d: open failed (Win32 %lu)",com,baud,(unsigned long)GetLastError());return false;}
+    DCB dcb{}; dcb.DCBlength=sizeof(dcb);
+    if(!GetCommState(serial,&dcb)){plat_log("COM%d: GetCommState failed (Win32 %lu)",com,(unsigned long)GetLastError()); CloseHandle(serial); serial=INVALID_HANDLE_VALUE; return false; }
+    dcb.BaudRate=baud; dcb.ByteSize=8; dcb.Parity=NOPARITY; dcb.StopBits=ONESTOPBIT;
+    if(!SetCommState(serial,&dcb)){plat_log("COM%d at %d: SetCommState failed (Win32 %lu)",com,baud,(unsigned long)GetLastError()); CloseHandle(serial); serial=INVALID_HANDLE_VALUE; return false; }
+    COMMTIMEOUTS to{};
+    to.ReadIntervalTimeout=MAXDWORD;
+    to.ReadTotalTimeoutMultiplier=0;
+    to.ReadTotalTimeoutConstant=0;
+    to.WriteTotalTimeoutMultiplier=0;
+    to.WriteTotalTimeoutConstant=50;
+    if(!SetCommTimeouts(serial,&to)){plat_log("COM%d: timeout configuration failed (Win32 %lu)",com,(unsigned long)GetLastError());CloseHandle(serial);serial=INVALID_HANDLE_VALUE;return false;}
+    PurgeComm(serial,PURGE_RXCLEAR|PURGE_TXCLEAR);
+    inp.com_port=com;inp.baud_rate=baud;
+    return true;
+}
+static void close_port(){
+    stop_mouse_monitor();
+    std::lock_guard<std::recursive_mutex> lock(serial_mutex);inp.device_ok=false;inp.keyboard_ok=false;inp.keyboard_api=false;device_is_makcu=false;
+    if(serial!=INVALID_HANDLE_VALUE) CloseHandle(serial);
+    serial=INVALID_HANDLE_VALUE;
+}
+static bool wr(const char* fmt,...){
+    std::lock_guard<std::recursive_mutex> lock(serial_mutex);
+    if(serial==INVALID_HANDLE_VALUE) return false;
+    char buf[128]; va_list v; va_start(v,fmt);
+    int n=vsnprintf(buf,sizeof(buf),fmt,v); va_end(v);
+    if(n<=0||n>=(int)sizeof(buf)) return false;
+    DWORD w_=0;bool ok=WriteFile(serial,buf,(DWORD)n,&w_,0)&&w_==(DWORD)n;if(ok)serial_sent++;else serial_failed++;return ok;
+}
+static bool pump_serial_locked(){
+    for(int pass=0;pass<16;pass++){
+        char bytes[256];DWORD got=0;if(!ReadFile(serial,bytes,sizeof(bytes),&got,nullptr))return false;
+        if(!got)break;serial_parser.feed(bytes,got);seen_stream_events=serial_parser.stream_events;
+    }return true;
+}
+struct SerialQueryTrace{std::string observed;u64 elapsed_ms=0;bool timed_out=false;};
+static bool reply_matches(const std::string& query,const std::string& frame){
+    if(frame.find("ERR")!=std::string::npos)return true;
+    if(query=="km.version()")return frame.find("MAKCU")!=std::string::npos||frame.find("KMBOX")!=std::string::npos||frame.find("KMBox")!=std::string::npos;
+    if(query=="km.ping()")return frame.find("PONG")!=std::string::npos;
+    int value=0;return makcu_serial::ownership(frame,query,value);
+}
+static std::string query_locked(const char* query,const char* ending,unsigned timeout_ms,SerialQueryTrace* trace){
+    if(!pump_serial_locked())return {};serial_parser.discard_completed();
+    if(!wr("%s%s",query,ending))return {};
+    u64 start=now_ms();while(now_ms()-start<std::max(1u,timeout_ms)){
+        if(!pump_serial_locked())return {};std::string frame;
+        while(serial_parser.take(frame)){
+            if(trace&&trace->observed.size()<256)trace->observed+=(trace->observed.empty()?"":" | ")+std::string(query)+":"+frame.substr(0,256-trace->observed.size());
+            if(reply_matches(query,frame)){if(trace)trace->elapsed_ms+=now_ms()-start;return frame;}
+        }
+        Sleep(1);
+    }
+    if(trace){trace->elapsed_ms+=now_ms()-start;trace->timed_out=true;auto partial=serial_parser.pending_preview();if(!makcu_serial::trimmed(partial).empty()&&trace->observed.size()<256)trace->observed+=" <partial>"+partial;}
+    return {};
+}
+static std::string query_device(const char* query,const char* ending="\r\n",unsigned timeout_ms=180,SerialQueryTrace* trace=nullptr){
+    std::lock_guard<std::recursive_mutex> lock(serial_mutex);if(trace)*trace={};
+    if(serial==INVALID_HANDLE_VALUE)return {};
+    if(!serial_query_synchronized&&std::strcmp(query,"km.version()")!=0){
+        auto barrier=query_locked("km.version()","\r",std::min(timeout_ms,35u),trace);
+        serial_query_synchronized=barrier.find("MAKCU")!=std::string::npos||barrier.find("KMBOX")!=std::string::npos||barrier.find("KMBox")!=std::string::npos;
+        if(!serial_query_synchronized)return {};
+    }
+    auto reply=query_locked(query,ending,timeout_ms,trace);serial_query_synchronized=!reply.empty()&&reply.find("ERR")==std::string::npos;return reply;
+}
+static bool ping_device(){
+    auto version=query_device("km.version()","\r");
+    bool valid=version.find("MAKCU")!=std::string::npos||version.find("KMBOX")!=std::string::npos||version.find("KMBox")!=std::string::npos;
+    if(!valid){auto alternate=query_device("km.version()","\r\n");valid=alternate.find("MAKCU")!=std::string::npos||alternate.find("KMBOX")!=std::string::npos||alternate.find("KMBox")!=std::string::npos;version+=alternate;}
+    if(!valid){auto ping=query_device("km.ping()","\n");valid=ping.find("PONG")!=std::string::npos;version+=ping;}
+    plat_log("COM%d probe: %s (%u response bytes)",inp.com_port,valid?"recognized device":"no recognized reply",(unsigned)version.size());
+    if(!valid)return false;device_is_makcu=version.find("MAKCU")!=std::string::npos;
+    auto keyboard=query_device("km.isdown(65)");inp.keyboard_api=keyboard.find("ERR")==std::string::npos&&(keyboard.find("0\r\n")!=std::string::npos||keyboard.find("1\r\n")!=std::string::npos||keyboard.find("2\r\n")!=std::string::npos||keyboard.find("3\r\n")!=std::string::npos);inp.keyboard_ok=false;
+    return true;
+}
+struct PhysicalMouseMonitor{
+    std::atomic<bool> run{false};std::thread worker;
+    std::atomic<unsigned> physical{0},injected{0},failures{0};
+    std::array<std::atomic<u64>,5> samples{};std::array<std::atomic<unsigned>,5> button_failures{};
+    std::array<std::atomic<int>,5> capability{};std::atomic<u64> cycle_ms{0};std::atomic<int> state{0};
+    ~PhysicalMouseMonitor(){run=false;if(worker.joinable())worker.join();}
+};
+static PhysicalMouseMonitor& physical_monitor(){static PhysicalMouseMonitor value;return value;}
+static int physical_button_index(int key){switch(key){case VK_LBUTTON:return 0;case VK_RBUTTON:return 1;case VK_MBUTTON:return 2;case VK_XBUTTON1:return 3;case VK_XBUTTON2:return 4;default:return -1;}}
+static std::string reply_preview(const std::string& input){
+    if(input.empty())return "<no reply>";std::string text;char hex[8];
+    for(unsigned char c:input){if(text.size()>160){text+="...";break;}if(c=='\r')text+="\\r";else if(c=='\n')text+="\\n";else if(c>=32&&c<127)text+=(char)c;else{snprintf(hex,sizeof(hex),"\\x%02X",c);text+=hex;}}
+    return text;
+}
+static void stop_mouse_monitor(){
+    auto& monitor=physical_monitor();monitor.run=false;if(monitor.worker.joinable())monitor.worker.join();
+    for(auto& sample:monitor.samples)sample=0;for(auto& value:monitor.button_failures)value=0;for(auto& value:monitor.capability)value=0;
+    monitor.physical=monitor.injected=0;monitor.cycle_ms=0;monitor.state=0;
+}
+static void start_mouse_monitor(){
+    stop_mouse_monitor();auto& monitor=physical_monitor();monitor.failures=0;
+    if(!device_is_makcu){monitor.state=4;return;}monitor.run=true;monitor.state=1;
+    try{monitor.worker=std::thread([](){
+        auto& monitor=physical_monitor();const char* primary[]={"km.left()","km.right()","km.middle()","km.side1()","km.side2()"};
+        const char* alternate[]={nullptr,nullptr,nullptr,"km.ms1()","km.ms2()"};const char* endings[]={"\r\n","\r","\n"};
+        std::array<unsigned,5> variants{};std::array<u64,5> retry_at{};unsigned probe_cursor=0;u64 last_report=0,last_cycle_start=0;
+        plat_log("Physical mouse monitor started: independently verifying all five ownership queries; serial output connection is a separate capability");
+        auto poll=[&](int index){
+            unsigned alternatives=alternate[index]?2:1,variant=variants[index],query_index=variant%alternatives,ending_index=variant/alternatives;
+            const char* query=query_index?alternate[index]:primary[index];SerialQueryTrace trace;int ownership=0;unsigned bit=1u<<index;
+            auto reply=query_device(query,endings[ending_index],25,&trace);
+            if(!reply.empty()&&makcu_serial::ownership(reply,query,ownership)){
+                bool first=monitor.capability[index].load()!=1;unsigned before=monitor.physical.load();
+                if(ownership&1)monitor.physical.fetch_or(bit);else monitor.physical.fetch_and(~bit);
+                if(ownership&2)monitor.injected.fetch_or(bit);else monitor.injected.fetch_and(~bit);
+                monitor.samples[index]=now_ms();monitor.capability[index]=1;monitor.button_failures[index]=0;retry_at[index]=0;
+                if(first)plat_log("Physical button capability verified: button=%d query=%s ending=%u ownership=%d reply=%s",index+1,query,ending_index,ownership,reply_preview(reply).c_str());
+                if((before&bit)!=(monitor.physical.load()&bit))plat_log("Physical mouse transition: button=%d held=%d ownership=%d (injected ownership excluded)",index+1,(ownership&1)!=0,ownership);
+            }else{
+                monitor.samples[index]=0;monitor.capability[index]=trace.timed_out?2:3;monitor.failures++;unsigned failed=++monitor.button_failures[index];
+                variants[index]=(variant+1)%(alternatives*3);retry_at[index]=now_ms()+(failed<=alternatives*3?80:3000);
+                if(failed<=alternatives*3||failed%20==0)plat_log("Physical button query unavailable: button=%d query=%s ending=%u elapsed=%llu ms timeout=%d reply=%s; retrying this button independently",index+1,query,ending_index,(unsigned long long)trace.elapsed_ms,trace.timed_out,reply_preview(trace.observed).c_str());
+            }
+        };
+        while(monitor.run){
+            u64 cycle_start=now_ms();if(last_cycle_start)monitor.cycle_ms=cycle_start-last_cycle_start;last_cycle_start=cycle_start;
+            // Keep verified buttons fresh first. One unavailable-button probe per
+            // cycle cannot prevent other buttons from continuing to work.
+            for(int index=0;index<5&&monitor.run;index++)if(monitor.capability[index].load()==1)poll(index);
+            for(int checked=0;checked<5&&monitor.run;checked++){
+                int index=(int)(probe_cursor++%5);if(monitor.capability[index].load()!=1&&now_ms()>=retry_at[index]){poll(index);break;}
+            }
+            u64 now=now_ms();unsigned known=0;
+            for(auto& sample:monitor.samples){u64 at=sample.load();known+=at&&now>=at&&now-at<=250;}
+            monitor.state=known==5?2:1;
+            if(now-last_report>5000){last_report=now;plat_log("Physical mouse monitor: known=%u/5 cycle=%llu ms physical_mask=0x%02X injected_mask=0x%02X failures=%u/%u/%u/%u/%u",known,(unsigned long long)monitor.cycle_ms.load(),monitor.physical.load(),monitor.injected.load(),monitor.button_failures[0].load(),monitor.button_failures[1].load(),monitor.button_failures[2].load(),monitor.button_failures[3].load(),monitor.button_failures[4].load());}
+            u64 deadline=cycle_start+40;while(monitor.run&&now_ms()<deadline)Sleep((DWORD)std::min<u64>(5,deadline-now_ms()));
+        }
+    });}catch(const std::exception& error){monitor.run=false;monitor.state=3;plat_log("Physical mouse monitor could not start: %s",error.what());}
+}
+static bool try_port(int port){for(int baud:{4000000,115200}){int selected=cfg.I("input.baud");if((selected==1&&baud!=115200)||(selected==2&&baud!=4000000))continue;if(!open_port(port,baud))continue;plat_log("Probing COM%d at %d baud",port,baud);if(ping_device())return true;close_port();}return false;}
+static std::vector<int> enum_com_ports(){
+    std::vector<int> out;
+    std::vector<char> names;
+    DWORD length=0;
+    for(DWORD capacity=4096;capacity<=262144;capacity*=2){
+        names.resize(capacity);length=QueryDosDeviceA(nullptr,names.data(),capacity);
+        if(length)break;
+        if(GetLastError()!=ERROR_INSUFFICIENT_BUFFER)return out;
+    }
+    if(!length)return out;
+    for(const char* p=names.data();*p;p+=strlen(p)+1){
+        if(strncmp(p,"COM",3)!=0)continue;
+        char* end=nullptr;long port=strtol(p+3,&end,10);
+        if(!end||*end||port<=0||port>256)continue;
+        char target[512]{};DWORD size=QueryDosDeviceA(p,target,sizeof(target));
+        if(size&&strstr(target,"Bth"))continue;
+        out.push_back((int)port);
+    }
+    std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());
+    return out;
+}
+static bool possible_unlisted_port(int port){
+    char name[20],target[512]{};snprintf(name,sizeof(name),"COM%d",port);
+    DWORD size=QueryDosDeviceA(name,target,sizeof(target));
+    return !size||strstr(target,"Bth")==nullptr;
+}
+namespace hw{
+bool physical_mouse_state(int key,bool& held){
+    held=false;int index=physical_button_index(key);if(index<0||!inp.device_ok||!device_is_makcu)return false;
+    auto& monitor=physical_monitor();u64 sampled=monitor.samples[index].load(),now=now_ms();
+    if(!sampled||now<sampled||now-sampled>250)return false;held=(monitor.physical.load()&(1u<<index))!=0;return true;
+}
+std::string physical_mouse_status(){
+    if(!inp.device_ok)return "Serial output: disconnected / physical buttons unavailable";
+    if(!device_is_makcu)return "Serial output: connected / physical button queries unavailable for this device";
+    auto& monitor=physical_monitor();u64 now=now_ms();const char* names[]={"Left","Right","Middle","M4","M5"};std::string text="Physical buttons: ";
+    for(int index=0;index<5;index++){u64 at=monitor.samples[index].load();bool known=at&&now>=at&&now-at<=250;bool held=(monitor.physical.load()&(1u<<index))!=0;
+        if(index)text+=" / ";text+=names[index];text+=known?(held?": held":": released"): ": unknown";
+    }return text+" / cycle "+std::to_string(monitor.cycle_ms.load())+" ms";
+}
+std::string diagnostic_summary(){return std::string("device=")+(inp.device_ok?"connected":"disconnected")+" panic="+(inp.panic?"on":"off")+" output="+(cfg.I("input.mode")==2?"disabled":"selected device")+" | "+physical_mouse_status()+" | serial command writes="+std::to_string(serial_sent.load())+" failures="+std::to_string(serial_failed.load());}
+static std::mutex diagnostic_mutex;static std::string keyboard_message="Keyboard output not tested";static u64 keyboard_test_started=0;static int keyboard_test_key=0;
+std::string keyboard_status(){std::lock_guard<std::mutex> lock(diagnostic_mutex);return keyboard_message;}
+bool can_send(int key){if(!Settings::action_output_key_allowed(key))return false;bool mouse=key==VK_LBUTTON||key==VK_RBUTTON||key==VK_MBUTTON||key==VK_XBUTTON1||key==VK_XBUTTON2;return inp.device_ok&&(mouse||(inp.keyboard_ok&&km_protocol::hid(key)>=0));}
+std::string test_keyboard(){
+    std::lock_guard<std::mutex> lock(diagnostic_mutex);int key=cfg.I("input.test_key");
+    if(!inp.device_ok||!inp.keyboard_api)return keyboard_message="Keyboard API is unavailable on this connection";
+    if(!snap.backend_managed||!snap.input_valid)return keyboard_message="Attach to the game so key delivery can be verified";
+    if(inp.panic||cfg.I("input.mode")==2)return keyboard_message="Keyboard test paused by the panic key or disabled output device";
+    if(game_key_down(key))return keyboard_message="Release the test key first";
+    auto command=km_protocol::press(key,180);if(command.empty())return keyboard_message="Choose a supported keyboard test key";
+    inp.keyboard_ok=false;keyboard_test_key=key;keyboard_test_started=now_ms();if(!wr("%s",command.c_str())){keyboard_test_started=0;return keyboard_message="Could not send the keyboard test to the device";}return keyboard_message="Test sent; waiting for the game-PC key bitmap";
+}
+void update_diagnostics(){
+    std::lock_guard<std::mutex> lock(diagnostic_mutex);if(!keyboard_test_started)return;
+    if(game_key_down(keyboard_test_key)){inp.keyboard_ok=true;keyboard_test_started=0;keyboard_message="Keyboard delivery verified by the game-PC key bitmap";}
+    else if(now_ms()-keyboard_test_started>1200){inp.keyboard_ok=false;keyboard_test_started=0;keyboard_message="Keyboard delivery not observed; keyboard actions remain disabled";}
+}
+Vec2 screen_to_counts(Vec2 pixels,u64 width,u64 height,float dt,float max_turn){
+    if(!snap.backend_managed)return pixels;float sensitivity=cfg.F("input.sensitivity"),adjust=1,fx=1,fy=1;
+    {std::lock_guard<std::mutex> lock(snap_mtx);if(cfg.B("input.auto_sensitivity")){sensitivity=snap.sensitivity;adjust=snap.fov_sensitivity;}
+        fx=std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);fy=std::sqrt(snap.view[4]*snap.view[4]+snap.view[5]*snap.view[5]+snap.view[6]*snap.view[6]);}
+    float x=cfg.F("input.yaw")*sensitivity*adjust,y=cfg.F("input.pitch")*sensitivity*adjust;if(x<=0||y<=0||fx<1e-5f||fy<1e-5f||!width||!height)return {};
+    Vec2 angle{rad2deg(std::atan2(pixels.x,width*.5f*fx)),rad2deg(std::atan2(pixels.y,height*.5f*fy))};float limit=max_turn*clampf(dt,0,.067f);if(limit>0&&angle.len()>limit)angle=angle*(limit/angle.len());Vec2 counts{angle.x/x,angle.y/y};if(!std::isfinite(counts.len()))return {};return {clampf(counts.x,-32767,32767),clampf(counts.y,-32767,32767)};
+}
+Vec2 guided_move(Vec2 error,aim_model::Movement& state,u64 width,u64 height,float dt,bool magnet){
+    const auto key=[&](const char* aim,const char* trigger){return magnet?trigger:aim;};
+    const float smooth=aim_model::smoothing_factor(cfg.F(key("aim.smooth","trigger.magnet_smooth")));
+    const float strength=cfg.F(key("aim.strength","trigger.magnet_strength"))/100.f;
+    const int curve=cfg.I(key("aim.curve","trigger.magnet_curve"));
+    if(!snap.backend_managed)return aim_model::consistent_motion(error,state,smooth,curve,dt,strength);
+    float fx=0,fy=0,sensitivity=cfg.F("input.sensitivity"),adjust=1;
+    {std::lock_guard<std::mutex> lock(snap_mtx);
+        fx=std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);
+        fy=std::sqrt(snap.view[4]*snap.view[4]+snap.view[5]*snap.view[5]+snap.view[6]*snap.view[6]);
+        if(cfg.B("input.auto_sensitivity")){sensitivity=snap.sensitivity;adjust=snap.fov_sensitivity;}
+    }
+    const float x=cfg.F("input.yaw")*sensitivity*adjust,y=cfg.F("input.pitch")*sensitivity*adjust;
+    if(!width||!height||!std::isfinite(fx+fy+x+y)||fx<1e-5f||fy<1e-5f||x<=0||y<=0){state={};return {};}
+    const Vec2 angle{rad2deg(std::atan2(error.x,width*.5f*fx)),rad2deg(std::atan2(error.y,height*.5f*fy))};
+    const auto step=aim_model::consistent_motion(angle,state,smooth,curve,dt,strength);
+    const Vec2 counts{step.x/x,step.y/y};
+    if(!std::isfinite(counts.len())){state={};return {};}
+    return {clampf(counts.x,-32767,32767),clampf(counts.y,-32767,32767)};
+}
+static bool output_blocked();
+static bool output_interval(){
+    if(output_blocked())return false;
+    static input_timing::Schedule schedule;u64 now=now_ms(),ready=schedule.ready_at(now,(unsigned)cfg.I("input.latency_ms"),(unsigned)cfg.I("input.delay_ms"));
+    if(ready>now)Sleep((DWORD)(ready-now));if(output_blocked())return false;schedule.sent(now_ms());return true;
+}
+
+std::string test_connection(){std::lock_guard<std::recursive_mutex> connection(connection_mutex);if(!inp.device_ok)return "No connected input device";bool keyboard_verified=inp.keyboard_ok;bool responded=ping_device();if(responded&&keyboard_verified&&inp.keyboard_api)inp.keyboard_ok=true;if(responded&&device_is_makcu&&!physical_monitor().run)start_mouse_monitor();return responded?"Serial output device responded; physical buttons are verified separately":"Device did not respond";}
+std::string test_mouse(){if(!inp.device_ok||cfg.I("input.mode")==2)return "No connected output device";if(inp.panic)return "Mouse test paused by the panic key";
+    if(cfg.I("input.latency_ms"))Sleep((DWORD)cfg.I("input.latency_ms"));if(!wr("km.move(4,0)\r\n"))return "Mouse test could not write to the device";return "Sent a small movement right (4 counts); confirm on game PC";
+}
+
+std::string test_click(){
+    if(!inp.device_ok||cfg.I("input.mode")==2)return "Connect an input device first";
+    if(inp.panic)return "Click test paused by the panic key";
+    if(cfg.I("input.latency_ms"))Sleep((DWORD)cfg.I("input.latency_ms"));bool pressed=wr("km.left(1)\r\n");Sleep(35);bool released=wr("km.left(0)\r\n");if(!released)return "Mouse release could not be sent";return pressed?"Sent one left click to the game PC":"Could not send the mouse press";
+}
+bool init(){
+    std::lock_guard<std::recursive_mutex> connection(connection_mutex);
+    close_port();
+    plat_stage("input","connecting serial device");    plat_log("Connecting input device...");
+    int wanted=cfg.I("input.com");
+    if(wanted>0){
+        if(try_port(wanted)){
+            inp.device_ok=true;
+            inp.device_text=std::string("COM")+std::to_string(wanted)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
+            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();
+            return true;
+        }
+        close_port();
+        plat_log("COM%d set manually but no device answered - scanning",wanted);
+    }
+    std::vector<int> ports=enum_com_ports();
+    plat_log("Found %d enumerated serial port(s) to try",ports.size());for(int port:ports)plat_log("Candidate input port: COM%d",port);
+    for(int c:ports){
+        if(c==wanted) continue;
+        if(try_port(c)){
+            inp.device_ok=true;
+            inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
+            if(cfg.find("input.com")) cfg.find("input.com")->i=c;
+            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();
+            return true;
+        }
+        close_port();
+    }
+    if(ports.empty()){
+        plat_log("No COM ports enumerated; probing COM1-COM32 directly, excluding known Bluetooth ports");
+        for(int c=1;c<=32;c++)if(c!=wanted&&possible_unlisted_port(c)&&try_port(c)){
+            inp.device_ok=true;inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
+            if(cfg.find("input.com"))cfg.find("input.com")->i=c;
+            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();return true;
+        }
+    }
+    inp.device_ok=false;inp.device_text=ports.empty()?"No serial COM ports found":"No COM device answered Makcu/KMBox probe";
+    plat_stage("input",inp.device_text);plat_log("Input device not connected: %s",inp.device_text.c_str());
+    return false;
+}
+void disconnect(){std::lock_guard<std::recursive_mutex> connection(connection_mutex);close_port();inp.device_ok=false;inp.device_text="Disconnected";plat_log("Input device disconnected by user");}
+void reconnect(){
+    std::lock_guard<std::recursive_mutex> connection(connection_mutex);
+    close_port(); inp.device_ok=false;
+    plat_log("Input device reconnecting...");
+    if(init()&&inp.device_ok) toast("input reconnected");
+    else toast("input reconnect FAILED",{1,0.3f,0.3f,1});
+}
+static bool output_blocked(){return !inp.device_ok||cfg.I("input.mode")==2||inp.panic||!game_data_permits_output();}
+static bool send_button(int b,bool down){
+    const char* name=b==0?"left":b==1?"right":b==2?"middle":b==4?"side1":"side2";
+    return wr("km.%s(%d)\r\n",name,down?1:0);
+}
+void mouse_move(int dx,int dy){if(!output_interval())return;wr("km.move(%d,%d)\r\n",dx,dy);}
+void mouse_down(int b){if(output_interval())send_button(b,true);}
+// Releases never wait for added latency or the output gate, so pausing cannot strand a generated press.
+void mouse_up(int b){send_button(b,false);}
+void mouse_click(int b,int ms){if(!output_interval())return;send_button(b,true);Sleep((DWORD)std::clamp(ms,1,500));send_button(b,false);}
+void key_tap(int vk,int ms){
+    if(!Settings::action_output_key_allowed(vk))return;
+    ms=std::clamp(ms,1,500);
+    if(vk==VK_LBUTTON||vk==VK_RBUTTON||vk==VK_MBUTTON||vk==VK_XBUTTON1||vk==VK_XBUTTON2){int button=vk==VK_LBUTTON?0:vk==VK_RBUTTON?1:vk==VK_MBUTTON?2:vk==VK_XBUTTON1?4:5;mouse_click(button,ms);return;}
+    if(!inp.keyboard_ok)return;auto command=km_protocol::press(vk,ms);if(command.empty()||!output_interval())return;wr("%s",command.c_str());
+}
+bool key_chord(int modifier,int key,int ms){
+    if(!Settings::action_output_key_allowed(modifier)||!Settings::action_output_key_allowed(key))return false;
+    if(!can_send(modifier)||!can_send(key)||!output_interval())return false;ms=std::clamp(ms,1,500);
+    auto button=[](int vk){return vk==VK_LBUTTON?0:vk==VK_RBUTTON?1:vk==VK_MBUTTON?2:vk==VK_XBUTTON1?4:vk==VK_XBUTTON2?5:-1;};
+    int first=button(modifier),second=button(key);
+    if(first>=0||second>=0){
+        bool down1=first>=0?send_button(first,true):wr("km.down(%d)\r\n",km_protocol::hid(modifier));
+        bool down2=second>=0?send_button(second,true):wr("km.down(%d)\r\n",km_protocol::hid(key));Sleep(ms);
+        bool up2=second>=0?send_button(second,false):wr("km.up(%d)\r\n",km_protocol::hid(key));
+        bool up1=first>=0?send_button(first,false):wr("km.up(%d)\r\n",km_protocol::hid(modifier));return down1&&down2&&up1&&up2;
+    }
+    auto down=km_protocol::chord(modifier,key,true),up=km_protocol::chord(modifier,key,false);if(down.empty()||up.empty())return false;
+    bool pressed=wr("%s",down.c_str());Sleep(ms);bool released=wr("%s",up.c_str());return pressed&&released;
+}
+}
+:::ENDFILE

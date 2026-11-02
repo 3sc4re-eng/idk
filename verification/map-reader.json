@@ -1,0 +1,22 @@
+{
+  "revision": 11193905,
+  "schema_source": "SchemaExplorer static export",
+  "schema_sha256": "aae61e0244da795555da7a0052bad5a1d71087468536a80f33e0abb703214f05",
+  "fields": {
+    "CSkeletonInstance::m_modelState": 320,
+    "CModelState::m_ModelName": 168
+  },
+  "map_identity_source": "C_World model resource path; bounded ASCII C-string reads confined to readable pages",
+  "packaged_maps": [
+    "dl_midtown",
+    "hero_testing"
+  ],
+  "missing_packaged_maps": [
+    "dl_hideout"
+  ],
+  "known_limitations": [
+    "Collision bounds are used for approximate aim regions, not animated skeletal bone transforms.",
+    "Collision-bound scale interpretation and region alignment require mini-PC verification.",
+    "No newly extracted Hideout collision asset was created."
+  ]
+}

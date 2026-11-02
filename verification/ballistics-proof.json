@@ -1,0 +1,14 @@
+{
+  "revision": 11193905,
+  "bullet_speed_getter": 9238544,
+  "weapon_info_lookup": 5005824,
+  "weapon_tree_find": 4707056,
+  "modifier_get": 20613552,
+  "modifier_evaluate": 20697712,
+  "weapon_primary_symbol": 56892456,
+  "gravity_reference": 60393184,
+  "cache_enabled": 65124271,
+  "cache_modes": 65124016,
+  "cache_default_mode": 65124276,
+  "hash_1_1": 1664691683
+}

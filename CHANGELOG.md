@@ -1,0 +1,96 @@
+# ACE — Changelog and next steps
+
+Use this one file for every project update. New entries go first. Record documentation changes here too. Never describe a plan, scratch proposal, or successful compilation as verified in-game behavior.
+
+Each entry must record:
+
+- **Changed:** the concrete change and affected files.
+- **State:** planned, staged outside the project, applied to source, compiled, or verified on the mini PC. Give each affected component its actual state.
+- **Verification:** the checks actually performed, their result, and any build ID or receipt they establish. Say explicitly when checks were not run.
+- **Limitations:** incomplete behavior, rudimentary implementation, known risks, or missing evidence.
+- **Next:** the next intended work, the proposed approach, and what evidence will establish success. These are plans, not completed features.
+
+Keep previous entries as history; append corrections in a newer entry. Do not invent historical changes, successful tests, offset discovery, performance improvements, or hardware results.
+
+## 2026-11-02 — Update 004: identify the correct GitHub destination
+
+**Changed:** Corrected the persistent repository destination in `AGENTS.md` to `https://github.com/3sc4re-eng/idk`. The user completed Git's sign-in through Chrome. The connected GitHub app had exposed the older `tdscare/idk`; the browser-authenticated Git account is `3sc4re-eng`, and its `idk` repository is empty, matching the user's newly created repository. No commit or branch was changed in `tdscare/idk`.
+
+**State:** Complete source upload is prepared for `3sc4re-eng/idk`; completion remains pending. Product source and executable are unchanged. The upload snapshot includes 192 project files, including all 114 extracted source files, both bundles, assets, regression sources, build script and documentation. Unapplied scratch fixes are excluded.
+
+**Verification:** Confirmed the browser-authenticated Git account and successful read access to its empty `idk` repository. A raw-byte manifest inventoried the 192 project files (about 102 MB) and verified hashes. The connector accepted the small bundle as an unreferenced object in the older repository, but the large-bundle transfer did not complete; no repository commit was published there. Git's normal bulk push will be used for the complete snapshot. No product or test executable was run.
+
+**Limitations:** A successful source upload will not resolve the runtime issues reported in Update 003 or update the older executable.
+
+**Next:** Push and verify the source snapshot in `3sc4re-eng/idk`, record its commit and remote file verification, then resume the focused mini-PC test-report fixes.
+
+## 2026-11-02 — Update 003: source upload preparation and mini-PC observations
+
+**Changed:** Added `README.md`, allowed the 114 extracted source files to be versioned while continuing to ignore generated build identity files, and recorded the user's authorization for future source uploads to `https://github.com/tdscare/idk` in `AGENTS.md`. GitHub upload is the current priority. The repository's existing `d` file and history will be preserved.
+
+**State:** Source upload prepared; completion is not yet claimed in this entry. Product source and the distributed executable remain unchanged from the 114-block source / 108-block executable baseline. New fixes described below are proposals outside the project and are not included as delivered source.
+
+**Verification:** Connected GitHub tools identified the authenticated account and `tdscare/idk`, with permission to upload. Its existing main branch was inspected read-only. Source and asset filenames were inventoried. No product, test binary, preview, DMA or device command was run on this PC.
+
+**Mini-PC report from the user:** The older no-parry package now reports roughly 121–200 reader Hz, with about 121 Hz after increasing discovery/world refresh frequency; this is user-reported evidence, not a fresh benchmark. The game must be open before the menu launches. The gameplay master overlaps navigation and is repeated in World, where disabling it also hides player ESP. Automatic map selection/collision fails in Hero Testing and Midtown. Ability cooldowns appear correct only for the ultimate. Generic breakable labels do not identify world props. An unobstructed player produces `No eligible visible aim region`; only Head and Neck are selectable. ESP lingers after player death. The user accepted keeping the third-person camera as the visibility origin.
+
+**Work prepared, not applied:** Focused launcher-wait and visual-control fixes were prepared outside the project and passed individual syntax-only compilation. Further scratch work separates native-joint/visibility/FOV failures, adds a default-on aim visibility switch, aligns visibility endpoints with sampled native aim points, hides confirmed-dead player ESP and reports existing native acquisition failure reasons. This scratch work has not passed the complete compile-only suite or produced a new executable. It changes no offsets and supplies no guessed poses.
+
+**Limitations:** The generic aim message does not prove that native bone reading alone is broken; missing collision, unavailable joints, target-state filters and FOV can all reject a target. Actual live fixes and world-prop/cooldown completeness remain unverified. The 118-file skeletal proposal remains undelivered.
+
+**Next:** Complete and verify the GitHub source upload first, then resume the focused test-report fixes, compile the combined source without executing it here, and produce a matching build receipt before the next mini-PC test. Use detailed native/map/cooldown diagnostics to identify missing data rather than bypassing identity/freshness checks or inventing ready states.
+
+## 2026-11-02 — Update 002: skeleton integration prepared, not applied
+
+**Changed:** Updated the scratch integration script to include the proposed generic profile-save serialization repair. Added a scratch fixture correction so valid cooldown-rendering scenarios explicitly supply a valid game clock, plus an unknown-clock scenario. Prepared `work/visuals_audit/persist_integration.py` to check the unchanged bundle hashes and preserve backups before writing complete blocks. Its apply call was aborted before dispatch, so it did not run. All these work files are outside the project; only this changelog is changed in the project by this update.
+
+**State:** The 118-file proposal remains staged outside the project. Current project bundles still have 114 blocks and the distributed executable still belongs to the earlier 108-block build. Skeletons have not been delivered. No GitHub push.
+
+**Verification:** A syntax-only compiler invocation completed with exit code 0 for the staged aim, trigger, config, entities, overlay, live backend, ESP and input translation units and gameplay/settings/skeleton/render-snapshot fixtures. It reported the existing Winsock include-order warning. That invocation preceded the added profile-save serialization transformation, so it does not verify that later transformation. The complete standard regression suite has not been compiled or executed. No product, test binary, menu preview, DMA operation or device command was run. A final read-only check confirmed the project's 114-block source and older build receipt remain unchanged.
+
+**Limitations:** Automatic security review blocked a delegated rendering review for possible cybersecurity risk. The source-integration call was separately aborted before dispatch, without a reason in that tool result. Neither action was retried through an alternative route. The native skeleton proposal remains unverified on the mini PC; no runtime skeleton, performance or alignment success is claimed.
+
+**Implementation notes:** The suggested Unity IL2CPP transform loop is not applicable to ACE's current Deadlock backend. The existing head-circle center already comes from a sampled native head position; its radius is still a visual size estimate rather than a measured head hitbox. Full skeleton connections require a current pose and real hierarchy. This is separate from a mesh renderer. Semi-transparent rectangular fill already exists in project source: `Box style -> Filled`, with visible/hidden fill colors and alpha; that feature was inspected, not newly implemented in this update.
+
+**Next:** The unfinished source integration and complete compile-only validation still need completion before any new distribution. Then a fresh build receipt must establish executable/source identity, followed by mini-PC verification of actual skeleton rendering, head-circle alignment and reader timing. Do not bypass the blocked review or describe the proposed hierarchy renderer as a delivered feature. Do not substitute estimated limb positions or a menu-only silhouette for live skeleton acquisition.
+
+## 2026-11-02 — Update 001: establish the running record
+
+**Changed:** Added this changelog and repository instructions in `AGENTS.md` requiring it to be updated with each future change. Added a current-status notice to `VERIFICATION.md` so its older receipts are clearly historical.
+
+**State:** Documentation applied to the project. No product source, bundled source block, executable, or runtime configuration changed in this update. Nothing pushed to GitHub.
+
+**Verification:** Read the current Git state, source bundles, generated source, build metadata and build receipt. Checked the documentation diff. No build, test binary, ACE process, preview, DMA operation, or input-device command was run for this update.
+
+**Limitations:** A documentation change repairs no runtime issue. The last successful build receipt belongs to an older source version. The user-reported low reader rate remains unresolved by hardware evidence.
+
+**Next:** Resume the unfinished settings repair and source integration, including review of profile save concurrency. Compile the complete regression sources without executing their binaries on this PC, then make a fresh build and verify that its receipt and executable match the updated bundles. A mini-PC test and its complete log are still needed to establish live correctness and reader performance. Model effects remain separate unfinished work; do not expose them as working features.
+
+### Baseline at this update
+
+- Project: `C:\Users\kieran\Desktop\ace`.
+- Source checkpoint: `1e4e7f3` — current map and profile integration before visual changes.
+- Project bundles: **114 blocks**, matching generated `src` at the audit checkpoint.
+- Distributed executable: **108-block build**, ID `20261102T093519Z-5f851ea792`. Its receipt verifies that build only.
+- Recorded executable SHA-256: `b83ed432c83e12b29cfb3c6536f452b5db6309100af5cf2851cc9eb62516c496`.
+- Only Deadlock has a live backend. Other game layouts do not establish live support. Module discovery is not complete runtime field discovery.
+- Authentication is a local session; remote licensing/authentication is absent.
+- Heroes automation and automatic melee parry were removed from the active menu. Some dormant implementation remains.
+
+### Unfinished work carried forward — not delivered
+
+Work is staged outside the project under `C:\Users\kieran\Documents\Codex\2026-10-31\referenced-chatgpt-conversation-this-is-an\work\visuals_audit\integrated`. Its **118-file source proposal has not replaced the 114-block project bundles or the distributed executable**.
+
+- **Settings synchronization:** immutable value snapshots and editor locking are staged. Initial compilation and a read-only review were performed; concurrent runtime behavior has not been tested. The review identified a remaining generic limitation: concurrent saves to one destination share a `.tmp` pathname. Address that before calling the save path concurrency-safe.
+- **Health colors:** staged changes use one solid color for current HP: green at full health, yellow at 50%, red at 25% or below, interpolated between those points. Preview HP adjustment and minion colors are included in the proposal, not the delivered build.
+- **Menu:** groupboxes, reorganized pages and a dedicated Checks page are staged. No visual runtime audit of this integration was performed.
+- **Visibility:** using the actual sampled aim point rather than separate estimated body positions is staged. Live correctness remains unverified.
+- **Skeleton:** a native hitbox-skeleton proposal exists with identity and freshness checks. It is not integrated or hardware-verified. Current project live aiming supports head and neck only; this does not establish a full animated model renderer.
+- **Validation:** new map/profile, settings and rendering checks are staged for inclusion in the standard check script. The extended suite has not been executed here.
+- **Chams, wireframe and player-model outlines:** absent from live rendering. Additional model analysis was blocked by automatic security review for possible cybersecurity risk. Do not mark these features implemented.
+
+### Why boxes do not establish chams support
+
+A box is a simple screen-space drawing derived from a position and rough bounds. A skeleton needs current joint positions and their connections. Rendering a colored character mesh requires model geometry and a matching animated pose. A body-silhouette outline needs that silhouette; a line around an ESP box is a different feature. Drawing an external overlay also does not automatically recolor the game's own model or supply its depth buffer.
+
+The real static model in the menu demonstrates a preview asset, not a verified live animated mesh. These effects are possible in principle, but the current implementation does not supply them. Missing data and rendering work must be stated directly rather than represented by placeholder controls.

@@ -1,0 +1,604 @@
+{
+  "engine_file": "F:\\SteamLibrary\\steamapps\\common\\Deadlock\\game\\bin\\win64\\engine2.dll",
+  "engine_sha256": "f7dd5763050e203361809360b4354ef3f768753bb6e43fb314d4822065d28da6",
+  "engine_timestamp": 1792525213,
+  "engine_image_size": 9461760,
+  "engine_candidate_rtti": [
+    {
+      "rva": "0x473370",
+      "class": "MapFieldAccessor@internal@protobuf@google"
+    },
+    {
+      "rva": "0x47d310",
+      "class": "MapFieldBase@internal@protobuf@google"
+    },
+    {
+      "rva": "0x47d3b0",
+      "class": "DynamicMapField@internal@protobuf@google"
+    },
+    {
+      "rva": "0x480b70",
+      "class": "?$CParallelLambdaJob@V<lambda_1>@?8??WriteToBufferBC7_bc7e@FloatBitMap_t@@IEBA_NPEAX_KW4ImageFormat@@AEBUFloatBitmapEncodeSettings_t@@@Z@@CParallelProcessLauncher"
+    },
+    {
+      "rva": "0x480b88",
+      "class": "?$CParallelLambdaJob@V<lambda_1>@?8??WriteToBufferBC7_ispctexcomp@FloatBitMap_t@@IEBA_NPEAX_KW4ImageFormat@@AEBUFloatBitmapEncodeSettings_t@@@Z@@CParallelProcessLauncher"
+    },
+    {
+      "rva": "0x480ba0",
+      "class": "?$CParallelLambdaJob@V<lambda_1>@?8??WriteToBufferETC@FloatBitMap_t@@IEBA_NPEAX_KW4ImageFormat@@AEBUFloatBitmapEncodeSettings_t@@@Z@@CParallelProcessLauncher"
+    },
+    {
+      "rva": "0x4d9148",
+      "class": "?$CParallelProcessorAbstract@V?$CParallelProcessor@UReadPacketEntitiesWorkItem_t@@V?$CMemberFuncJobItemProcessor@UReadPacketEntitiesWorkItem_t@@VCNetworkGameClient@@V2@@@$00@@"
+    },
+    {
+      "rva": "0x4dc938",
+      "class": "?$_Func_impl_no_alloc@V<lambda_1>@?M@??PrintNetworkSummaryReport@CNetworkGameClient@@QEAAXXZ@XPEBD@std"
+    },
+    {
+      "rva": "0x4dd548",
+      "class": "CNetworkGameClient"
+    },
+    {
+      "rva": "0x4e2790",
+      "class": "CEngineClient"
+    },
+    {
+      "rva": "0x4e47c0",
+      "class": "CNetworkGameClientBase"
+    },
+    {
+      "rva": "0x514078",
+      "class": "CSource2Metrics_FetchMapData_Request"
+    },
+    {
+      "rva": "0x514578",
+      "class": "CSource2Metrics_FetchMapData_Response_MapData"
+    },
+    {
+      "rva": "0x514778",
+      "class": "CSource2Metrics_FetchMapData_Response"
+    },
+    {
+      "rva": "0x51deb0",
+      "class": "?$CConCommandMemberAccessor@VCMapListService@@"
+    },
+    {
+      "rva": "0x51ded0",
+      "class": "?$CBaseEngineService@VIMapListService@@"
+    },
+    {
+      "rva": "0x51dfc8",
+      "class": "CMapListService"
+    },
+    {
+      "rva": "0x52b528",
+      "class": "CHostStateMgr"
+    }
+  ],
+  "engine_relevant_strings": [
+    {
+      "rva": "0x4d8ca8",
+      "text": "CNetworkGameClient::OnPreserveEntity"
+    },
+    {
+      "rva": "0x4d8e60",
+      "text": "CNetworkGameClient::InternalProcessPacketEntities"
+    },
+    {
+      "rva": "0x4df3a0",
+      "text": "CNetworkGameClient::SetSignonState: end %i"
+    },
+    {
+      "rva": "0x4df3d0",
+      "text": "CNetworkGameClient::SetSignonState: start %i"
+    },
+    {
+      "rva": "0x4dff90",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclient.cpp"
+    },
+    {
+      "rva": "0x4e0460",
+      "text": "CNetworkGameClient::ClientSidePredict"
+    },
+    {
+      "rva": "0x4e0560",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclient.cpp:2666"
+    },
+    {
+      "rva": "0x4e0ca0",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclient.cpp:3675"
+    },
+    {
+      "rva": "0x4e13c0",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclient.cpp:4474"
+    },
+    {
+      "rva": "0x4e1660",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclient.cpp:4770"
+    },
+    {
+      "rva": "0x4e1a58",
+      "text": "CNetworkGameClient::SendVprofLiteProfileToServer"
+    },
+    {
+      "rva": "0x4e1af0",
+      "text": "CNetworkGameClient::UpdateNetworkQualityMessages"
+    },
+    {
+      "rva": "0x4e2428",
+      "text": "Source2EngineToClient001"
+    },
+    {
+      "rva": "0x4e5838",
+      "text": "--CNetworkGameClientBase"
+    },
+    {
+      "rva": "0x4e5858",
+      "text": "++CNetworkGameClientBase"
+    },
+    {
+      "rva": "0x4e5bb0",
+      "text": "CNetworkGameClientBase::FullConnect"
+    },
+    {
+      "rva": "0x4e6230",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclientbase.cpp"
+    },
+    {
+      "rva": "0x4e6280",
+      "text": "CNetworkGameClientBase::SynchronizeAndBlockUntilLoaded"
+    },
+    {
+      "rva": "0x4e6a30",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclientbase.cpp:2821"
+    },
+    {
+      "rva": "0x4e73b0",
+      "text": "CNetworkGameClientBase::ConstructFakeClientClassesListFromServerClasses"
+    },
+    {
+      "rva": "0x4e7400",
+      "text": "CNetworkGameClientBase::BuildClientClassDictionary failed, no classes exported!"
+    },
+    {
+      "rva": "0x4e7450",
+      "text": "CNetworkGameClientBase::BuildClientClassDictionary"
+    },
+    {
+      "rva": "0x4e7698",
+      "text": "CNetworkGameClientBase::CopyEntityBaseline"
+    },
+    {
+      "rva": "0x4e76e0",
+      "text": "CNetworkGameClientBase::DecodeClassBaseline"
+    },
+    {
+      "rva": "0x4e7940",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclientbase.cpp:4580"
+    },
+    {
+      "rva": "0x4e7a20",
+      "text": "C:\\buildworker\\citadel_rel_win64\\build\\src\\engine2\\networkgameclientbase.cpp:4538"
+    },
+    {
+      "rva": "0x4e82b8",
+      "text": "Source2EngineToClientStringTable001"
+    },
+    {
+      "rva": "0x51e688",
+      "text": "Poor man's restart: reload the current map from disk."
+    },
+    {
+      "rva": "0x527c78",
+      "text": "HostStateMgr001"
+    },
+    {
+      "rva": "0x527ec8",
+      "text": "opens the current map in hammer."
+    },
+    {
+      "rva": "0x52b6b0",
+      "text": "sv_hoststate_quit_syscall"
+    },
+    {
+      "rva": "0x52b6d0",
+      "text": "HostStateManager"
+    },
+    {
+      "rva": "0x5c0110",
+      "text": ".?AV<lambda_1>@?M@??PrintNetworkSummaryReport@CNetworkGameClient@@QEAAXXZ@"
+    },
+    {
+      "rva": "0x5c571d",
+      "text": "@@IThreadPool@@QEAA?AV?$CSmartPtr@VCThreadedJob@@VCRefCountAccessor@@@@PEBDW4JobPriority_t@@I$$QEAV<lambda_3>@?BJ@??ProcessReadPacketEntitiesWorkItems@CNetworkGameClient@@AEAAXW4RPEStatType_t@@AEAVCEntityReadInfo@@@Z@@Z@"
+    },
+    {
+      "rva": "0x5c5810",
+      "text": ".?AV?$CParallelProcessorAbstract@V?$CParallelProcessor@UReadPacketEntitiesWorkItem_t@@V?$CMemberFuncJobItemProcessor@UReadPacketEntitiesWorkItem_t@@VCNetworkGameClient@@V2@@@$00@@@@"
+    },
+    {
+      "rva": "0x5c58e0",
+      "text": ".?AV?$CParallelProcessorAbstract@V?$CParallelProcessor@PEAUReadPacketEntitiesWorkItem_t@@V?$CMemberFuncJobItemProcessor@PEAUReadPacketEntitiesWorkItem_t@@VCNetworkGameClient@@V2@@@$00@@@@"
+    },
+    {
+      "rva": "0x5c6930",
+      "text": ".?AV?$_Func_impl_no_alloc@V<lambda_1>@?M@??PrintNetworkSummaryReport@CNetworkGameClient@@QEAAXXZ@XPEBD@std@@"
+    },
+    {
+      "rva": "0x5c71a8",
+      "text": ".?AVCNetworkGameClientBase@@"
+    },
+    {
+      "rva": "0x5c7290",
+      "text": ".?AVCNetworkGameClient@@"
+    },
+    {
+      "rva": "0x5c72c0",
+      "text": ".?AVINetworkGameClient@@"
+    },
+    {
+      "rva": "0x5c7742",
+      "text": "eline@CNetworkGameClientBase@@IEAAXHH@Z@@@YAXAEAV?$CUtlVector@HHV?$CUtlVectorMemory_Growable@HH$0A@@@@@PEBD$$QEAV1?1??CopyEntityBaseline@CNetworkGameClientBase@@IEAAXHH@Z@HHW4JobPriority_t@@@Z@@CParallelProcessLauncher@@"
+    },
+    {
+      "rva": "0x5d28f0",
+      "text": ".?AV?$CTier0AppSystem@VIHostStateMgr@@$0A@@@"
+    },
+    {
+      "rva": "0x5d2930",
+      "text": ".?AV?$CTier1AppSystem@VIHostStateMgr@@$0A@@@"
+    },
+    {
+      "rva": "0x5d2970",
+      "text": ".?AV?$CTier2AppSystem@VIHostStateMgr@@$0A@@@"
+    },
+    {
+      "rva": "0x5d29b0",
+      "text": ".?AV?$CTier3AppSystem@VIHostStateMgr@@$0A@@@"
+    },
+    {
+      "rva": "0x5d29f0",
+      "text": ".?AVCHostStateMgr@@"
+    },
+    {
+      "rva": "0x5d2a18",
+      "text": ".?AV?$CBaseAppSystem@VIHostStateMgr@@@@"
+    },
+    {
+      "rva": "0x5d2a50",
+      "text": ".?AV?$CTier4AppSystem@VIHostStateMgr@@$0A@@@"
+    },
+    {
+      "rva": "0x5d2a90",
+      "text": ".?AVIHostStateMgr@@"
+    }
+  ],
+  "schema_revision": 11193905,
+  "schema_engine2_class_count": 0,
+  "schema_selected": [
+    {
+      "name": "CBodyComponent",
+      "size": 120,
+      "parents": [
+        {
+          "module": "entity2",
+          "name": "CEntityComponent"
+        }
+      ],
+      "fields": [
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_pSceneNode",
+          "offset": 8,
+          "type": {
+            "category": "ptr",
+            "inner": {
+              "category": "declared_class",
+              "module": "client",
+              "name": "CGameSceneNode"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "CBodyComponentBaseModelEntity",
+      "size": 1328,
+      "parents": [
+        {
+          "module": "client",
+          "name": "CBodyComponentSkeletonInstance"
+        }
+      ],
+      "fields": []
+    },
+    {
+      "name": "CBodyComponentSkeletonInstance",
+      "size": 1328,
+      "parents": [
+        {
+          "module": "client",
+          "name": "CBodyComponent"
+        }
+      ],
+      "fields": []
+    },
+    {
+      "name": "CModelState",
+      "size": 704,
+      "parents": [],
+      "fields": [
+        {
+          "name": "m_hModel",
+          "network": {
+            "changeCallbacks": [
+              "skeletonModelChanged"
+            ],
+            "resourceType": "vmdl",
+            "type": "HModelStrong"
+          },
+          "offset": 160,
+          "type": {
+            "alignment": 8,
+            "category": "atomic",
+            "inner": {
+              "category": "declared_class",
+              "module": "resourcesystem",
+              "name": "InfoForResourceTypeCModel"
+            },
+            "name": "CStrongHandle",
+            "size": 8
+          }
+        },
+        {
+          "name": "m_ModelName",
+          "offset": 168,
+          "type": {
+            "alignment": 8,
+            "category": "atomic",
+            "name": "CUtlSymbolLarge",
+            "size": 8
+          }
+        },
+        {
+          "name": "m_nBodyGroupChoices",
+          "network": {
+            "changeCallbacks": [
+              "bodyGroupChoiceChanged"
+            ],
+            "type": "int32"
+          },
+          "offset": 600,
+          "type": {
+            "alignment": 8,
+            "category": "atomic",
+            "inner": {
+              "category": "builtin",
+              "name": "int32"
+            },
+            "name": "C_NetworkUtlVectorBase",
+            "size": 24
+          }
+        }
+      ]
+    },
+    {
+      "name": "CSkeletonInstance",
+      "size": 1200,
+      "parents": [
+        {
+          "module": "client",
+          "name": "CGameSceneNode"
+        }
+      ],
+      "fields": [
+        {
+          "name": "m_modelState",
+          "network": {
+            "type": "CModelState"
+          },
+          "offset": 320,
+          "type": {
+            "category": "declared_class",
+            "module": "client",
+            "name": "CModelState"
+          }
+        }
+      ]
+    },
+    {
+      "name": "C_BaseEntity",
+      "size": 1520,
+      "parents": [
+        {
+          "module": "entity2",
+          "name": "CEntityInstance"
+        }
+      ],
+      "fields": [
+        {
+          "name": "m_CBodyComponent",
+          "network": {
+            "alias": "CBodyComponent",
+            "class": "CBodyComponent",
+            "priority": 48,
+            "type": "CBodyComponent::Storage_t",
+            "typeAlias": "CBodyComponent",
+            "userGroups": [
+              "CBodyComponent"
+            ]
+          },
+          "offset": 48,
+          "type": {
+            "category": "ptr",
+            "inner": {
+              "category": "declared_class",
+              "module": "client",
+              "name": "CBodyComponent"
+            }
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_pGameSceneNode",
+          "offset": 816,
+          "type": {
+            "category": "ptr",
+            "inner": {
+              "category": "declared_class",
+              "module": "client",
+              "name": "CGameSceneNode"
+            }
+          }
+        },
+        {
+          "name": "m_hSceneObjectController",
+          "offset": 876,
+          "type": {
+            "alignment": 4,
+            "category": "atomic",
+            "inner": {
+              "category": "declared_class",
+              "module": "client",
+              "name": "C_BaseEntity"
+            },
+            "name": "CHandle",
+            "size": 4
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_bInterpolateEvenWithNoModel",
+          "offset": 897,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_bApplyLayerMatchIDToModel",
+          "offset": 899,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        },
+        {
+          "name": "m_nSceneObjectOverrideFlags",
+          "offset": 964,
+          "type": {
+            "category": "builtin",
+            "name": "uint8"
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_nGroundBodyIndex",
+          "network": {
+            "priority": 32,
+            "type": "int",
+            "userGroups": [
+              "Player"
+            ]
+          },
+          "offset": 1328,
+          "type": {
+            "category": "builtin",
+            "name": "int32"
+          }
+        },
+        {
+          "name": "m_bRenderWithViewModels",
+          "offset": 1378,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        }
+      ]
+    },
+    {
+      "name": "C_BaseModelEntity",
+      "size": 2992,
+      "parents": [
+        {
+          "module": "client",
+          "name": "C_BaseEntity"
+        }
+      ],
+      "fields": [
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_bInitModelEffects",
+          "offset": 1920,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        },
+        {
+          "metadata": [
+            {
+              "name": "MNotSaved"
+            }
+          ],
+          "name": "m_bDoingModelEffects",
+          "offset": 1921,
+          "type": {
+            "category": "builtin",
+            "name": "bool"
+          }
+        }
+      ]
+    },
+    {
+      "name": "C_World",
+      "size": 2992,
+      "parents": [
+        {
+          "module": "client",
+          "name": "C_BaseModelEntity"
+        }
+      ],
+      "fields": []
+    }
+  ],
+  "client_scene_rtti": {
+    "0x28523e8": "CBodyComponent",
+    "0x28526a0": "CBodyComponentSkeletonInstance",
+    "0x28b5880": "CBodyComponentBaseModelEntity",
+    "0x2bed258": "C_BaseModelEntity",
+    "0x2c155b0": "CModelState",
+    "0x2c15650": "CSkeletonInstance",
+    "0x2c18120": "C_World",
+    "0x2c1fbc0": "C_BaseEntity"
+  },
+  "boundary": "RTTI/string names do not establish object layout, live global addresses or the loaded-map string. No getter invoked and no guessed CS2 offset."
+}

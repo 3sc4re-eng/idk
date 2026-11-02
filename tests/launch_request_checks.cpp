@@ -1,0 +1,21 @@
+#include "launch_request.h"
+using launch_request::Mode;
+constexpr const char* normal[]={"loader.exe"};
+constexpr const char* preview[]={"loader.exe","--preview"};
+constexpr const char* loader_preview[]={"loader.exe","--loader-preview"};
+constexpr const char* deadlock[]={"loader.exe","--launch-menu","deadlock"};
+constexpr const char* other_game[]={"loader.exe","--launch-menu","cs2"};
+constexpr const char* mixed_preview[]={"loader.exe","--preview","deadlock"};
+constexpr const char* missing[]={"loader.exe","--launch-menu"};
+constexpr const char* extra[]={"loader.exe","--launch-menu","deadlock","anything"};
+constexpr const char* malformed[]={"loader.exe",nullptr,"deadlock"};
+static_assert(launch_request::parse(1,normal)==Mode::Manual);
+static_assert(launch_request::parse(2,preview)==Mode::Preview);
+static_assert(launch_request::parse(2,loader_preview)==Mode::LoaderPreview);
+static_assert(launch_request::parse(3,deadlock)==Mode::DeadlockMenu);
+static_assert(launch_request::parse(3,other_game)==Mode::Invalid);
+static_assert(launch_request::parse(3,mixed_preview)==Mode::Invalid);
+static_assert(launch_request::parse(2,missing)==Mode::Invalid);
+static_assert(launch_request::parse(4,extra)==Mode::Invalid);
+static_assert(launch_request::parse(3,malformed)==Mode::Invalid);
+static_assert(launch_request::parse(0,nullptr)==Mode::Invalid);
