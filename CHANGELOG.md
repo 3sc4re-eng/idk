@@ -12,6 +12,18 @@ Each entry must record:
 
 Keep previous entries as history; append corrections in a newer entry. Do not invent historical changes, successful tests, offset discovery, performance improvements, or hardware results.
 
+## 2026-11-02 — Update 005: complete source upload verified
+
+**Changed:** Uploaded the complete maintained source snapshot to `https://github.com/3sc4re-eng/idk` on `main`, initial source commit `c84d2b34abc81bbc7852f549a8b3ef71e39ffdcb`. It contains 192 files: both source bundles, all 114 extracted source files, build script, regression sources, collision/radar assets, tool sources and documentation. This follow-up changelog entry records the successful upload.
+
+**State:** Source upload completed. The newer fixes and 118-file skeleton proposal remain staged outside the project and are not delivered by this upload. The older distributed executable has not been rebuilt.
+
+**Verification:** Git push completed with exit code 0. Independent remote-ref lookup and fetch confirmed GitHub `main` at the initial source commit with 192 files. Every remote-tree path and Git object hash was compared with the raw-byte upload manifest. No product or test binary was run, and no account/license/configuration files, logs, generated build receipts, runtime DLLs or executables were uploaded. The older `tdscare/idk` branch/history was left unchanged.
+
+**Limitations:** Repository availability is not hardware verification. The mini-PC issues from Update 003 remain open; no claim is made that the uploaded code fixes aiming, map collision, cooldown replication, dead-player rendering or menu overlap.
+
+**Next:** Resume the focused test-report fixes, starting with distinct aim rejection diagnostics, actual sampled-point visibility, a default-on diagnostic visibility switch, dead-player ESP filtering and independent category controls; compile the combined changes, update this log, and upload completed source updates to the same repository. Produce a new build only after its sources and validation status can be identified accurately.
+
 ## 2026-11-02 — Update 004: identify the correct GitHub destination
 
 **Changed:** Corrected the persistent repository destination in `AGENTS.md` to `https://github.com/3sc4re-eng/idk`. The user completed Git's sign-in through Chrome. The connected GitHub app had exposed the older `tdscare/idk`; the browser-authenticated Git account is `3sc4re-eng`, and its `idk` repository is empty, matching the user's newly created repository. No commit or branch was changed in `tdscare/idk`.
