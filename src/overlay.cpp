@@ -978,7 +978,7 @@ static bool make_overlay_swap_chain(HWND hwnd,int& W,int& H,IDXGISwapChain** swa
     plat_log("Overlay: D3D OK (Flvl 0x%04X)",(unsigned)fl);
     return true;
 }
-static std::atomic<bool> dma_thread_run{false},dma_restart_requested{false};
+static std::atomic<bool> dma_thread_run{false},dma_restart_requested{false},input_reconnect_requested{false};
 static void dma_worker(){
     auto failed=[](const char* detail){
         dma_thread_run=false;
@@ -994,6 +994,9 @@ static void dma_worker(){
     if(cfg.B("input.autoconnect")&&cfg.I("input.mode")!=2&&!inp.device_ok)hw::init();
     u64 last_try=0;
     while(dma_thread_run){
+        if(input_reconnect_requested.exchange(false)){
+            hw::reconnect();if(!dma_thread_run)break;
+        }
         if(dma_restart_requested.exchange(false)){plat_stage("attach","stopping reader for DMA restart");entity_thread_stop();off.invalidate("DMA restart requested");live_backend::live.reset();mem.disconnect();last_try=0;plat_log("Recovery: DMA stopped; reconnecting");}
         if(!off.resolved){
             if(entity_reader_active())entity_thread_stop();
@@ -1112,7 +1115,7 @@ int run(bool preview){
         if(listening_key.empty()&&!shortcut_block_key&&pk&&!pk_last) inp.panic=!inp.panic;
         pk_last=pk;
         if(!preview&&(GetAsyncKeyState(cfg.I("input.reconnect_key"))&0x8000)&&!inp.device_ok){
-            static u64 t=0; if(now_ms()-t>2000){ t=now_ms(); hw::reconnect(); }
+            static u64 t=0;if(now_ms()-t>2000){t=now_ms();input_reconnect_requested=true;}
         }
         bool refresh_key=game_key_down(cfg.I("system.recache_key"))||(GetAsyncKeyState(cfg.I("system.recache_key"))&0x8000);static bool refresh_previous=false;if(!preview&&refresh_key&&!refresh_previous&&listening_key.empty())request_recache();refresh_previous=refresh_key;
         plat_stage("renderer","updating frame",false);
@@ -1336,7 +1339,7 @@ int run(bool preview){
                     ImGui::BeginDisabled(cfg.B("system.fps_uncapped"));items({"system.overlay_vsync"});ImGui::EndDisabled();if(cfg.B("system.overlay_vsync")&&!cfg.B("system.fps_uncapped"))ImGui::TextWrapped("VSync limits FPS to the overlay display refresh rate.");section("MENU & TEXT SIZE");items({"ui.menu_size","ui.font_size","esp.font_size"});
                 }else if(settings_page==1){
                     section("INPUT DEVICE");items({"input.mode","input.com","input.baud","input.autoconnect"});
-                    ImGui::TextWrapped("%s",inp.device_text.c_str());
+                    ImGui::TextWrapped("%s",inp.device_status().c_str());
                     section("INPUT TIMING");items({"input.latency_ms","input.delay_ms"});
                     section("PAUSE AUTOMATIC INPUT");items({"input.disable_in_overlay","input.disable_when_dead","input.disable_in_scoreboard","input.disable_when_spectator"});
                     section("SENSITIVITY");items({"input.auto_sensitivity"});if(!cfg.B("input.auto_sensitivity"))items({"input.sensitivity"});
@@ -1420,7 +1423,7 @@ int run(bool preview){
                     section("DEVICE CAPABILITIES");ImGui::TextWrapped("%s",hw::physical_mouse_status().c_str());
                     ImGui::TextWrapped("Output: %s",inp.keyboard_ok?"Mouse and verified keyboard input":"Mouse buttons only");ImGui::TextWrapped("%s",hw::keyboard_status().c_str());
                     section("DEVICE TESTS");ImGui::BeginDisabled(preview);
-                    if(ImGui::Button("Reconnect input device",{-1,36}))hw::reconnect();if(ImGui::Button("Disconnect input device",{-1,30}))hw::disconnect();
+                    if(ImGui::Button("Reconnect input device",{-1,36}))input_reconnect_requested=true;if(ImGui::Button("Disconnect input device",{-1,30}))hw::disconnect();
                     if(inp.keyboard_api){draw_item("input.test_key","Choose an unused key on the game PC.");if(ImGui::Button("Test keyboard delivery",{-1,30})){input_test_status=hw::test_keyboard();plat_log("Input test: %s",input_test_status.c_str());}}
                     if(ImGui::Button("Check input connection",{-1,30})){input_test_status=hw::test_connection();plat_log("Input test: %s",input_test_status.c_str());}
                     if(ImGui::Button("Test mouse movement",{-1,30})){input_test_status=hw::test_mouse();plat_log("Input test: %s",input_test_status.c_str());}
@@ -1518,6 +1521,7 @@ int run(bool preview){
         render_timings.wait_ms=std::chrono::duration<double,std::milli>(frame_end-present_end).count();render_timings.present_result=presented;
         if(presented==DXGI_ERROR_DEVICE_REMOVED||presented==DXGI_ERROR_DEVICE_RESET){plat_log("Renderer device lost: Present HRESULT 0x%08X; removal reason 0x%08X",(unsigned)presented,(unsigned)dev->GetDeviceRemovedReason());done=true;}
     }
+    if(!preview)hw::cancel_all(); // Stop pending automatic actions before potentially slow teardown.
     framebuffer_capture.shutdown(); // Render-thread GPU teardown; join CPU writer before COM/device shutdown.
     dma_thread_run=false;
     if(dma_w.joinable())dma_w.join();

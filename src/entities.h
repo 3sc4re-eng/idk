@@ -33,7 +33,7 @@ struct Entity{
     float windup_pct=0; bool melee_windup=false; bool ult_ready=false; bool casting=false;
     u64 visible_since=0,last_seen=0,owner=0;u32 handle=0,ability_token=0;
     bool disarmed=false,reloading=true,weapon_valid=false,active_reload_allowed=false;float reload_begin=0,reload_end=0,reload_pause=0,reload_fraction=0,reload_width=0;std::vector<u32> removable_debuffs;
-    bool world_obstacle=false;float scale=1;bool bullet_invuln=false,team_visible=false,occlusion_valid=false;std::array<bool,7> bone_visible{},bone_visibility_known{};
+    bool world_obstacle=false;float scale=1;bool bullet_invuln=false,team_visible=false,occlusion_valid=false;std::array<bool,7> bone_visible{},bone_visibility_known{};u64 visibility_scene=0,visibility_obstacles=0,visibility_sample_ms=0;
     bool public_ultimate_valid=false,public_ultimate_trained=false;float public_ultimate_cooldown_start=0,public_ultimate_cooldown_end=0,public_ultimate_stopped_remaining=0;u64 public_ultimate_sample_ms=0;
     bool charging=false;bool valid=false,visibility_known=false,abilities_valid=false,modifiers_valid=false,ability_blocked=false;
     Vec3 bounds_min{-16,-16,0},bounds_max{16,16,72},facing{};bool bounds_valid=false;float collision_radius=0;std::string type_name;std::vector<Ability> abilities;

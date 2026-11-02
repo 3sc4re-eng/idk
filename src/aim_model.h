@@ -1,3 +1,4 @@
+#include "decision_frame.h"
 #pragma once
 #include "config.h"
 #include "entities.h"
@@ -14,32 +15,39 @@ inline std::string key(int index,const char* suffix=""){return std::string("aim.
 struct Point{Vec2 screen{-99999,-99999};int bone=-1,priority=-1;float distance=1e30f;bool valid()const{return bone>=0;}};
 inline bool on_screen(Vec2 p,float w,float h){return std::isfinite(p.x)&&std::isfinite(p.y)&&p.x>=0&&p.y>=0&&p.x<w&&p.y<h;}
 inline bool region_world(const Entity& e,int index,Vec3& point){
-    if(snap.backend_managed)return native_target::point(e,index,point,snap.native_binding_epoch.load(),mem.attachment_epoch(),now_ms());
+    if(decision_frame::managed())return native_target::point(e,index,point,decision_frame::binding_epoch(),mem.attachment_epoch(),now_ms());
     if(target_geometry::region(e,index,point))return true;
-    if(snap.backend_managed||index<0||index>=bone_count)return false;
+    if(decision_frame::managed()||index<0||index>=bone_count)return false;
     point=e.pos+Vec3{0,0,heights[index]};return true; // Isolated settings/test fixtures only.
 }
 // Clearance is recorded at the same sampled native joint used for selection.
 // Diagnostic bypass never creates absent joint coordinates.
+inline bool clearance_current(const Entity& e){
+    if(!decision_frame::managed())return true;
+    const auto now=now_ms();if(!e.visibility_sample_ms||now<e.visibility_sample_ms||now-e.visibility_sample_ms>250)return false;
+    const collision::Revision observed{e.visibility_scene,e.visibility_obstacles};
+    if(const auto* frame=decision_frame::active())if(observed!=frame->geometry)return false;
+    return observed==collision::revision();
+}
 inline Point select(const Entity& e,u64 w,u64 h,float limit=1e30f,bool require_visibility=true){
-    Point best;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return best;
+    Point best;if((require_visibility&&(!e.visible||!clearance_current(e)))||e.stealthed||e.invuln||e.bullet_invuln||(decision_frame::managed()&&!e.modifiers_valid))return best;
     Vec2 crosshair{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(decision_frame::managed()&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-crosshair).len();if(distance>limit)continue;
         if(priority>best.priority||(priority==best.priority&&distance<best.distance))best={p,i,priority,distance};
     }return best;
 }
-inline float projection_x(){if(!snap.backend_managed)return 1;std::lock_guard<std::mutex> lock(snap_mtx);return std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);}
+inline float projection_x(){if(const auto* frame=decision_frame::active())return frame->managed?frame->projection_x():1;if(!decision_frame::managed())return 1;std::lock_guard<std::mutex> lock(snap_mtx);return std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);}
 inline unsigned bone_stamp(){unsigned v=2166136261u;for(int i=0;i<bone_count;i++)v=(v^(unsigned)(cfg.I(key(i).c_str())+2))*16777619u;return v;}
 inline float acquisition_roll(u64 entity,unsigned session){u64 v=entity^(u64(session)<<32);v^=v>>33;v*=0xff51afd7ed558ccdULL;v^=v>>33;return (v&0xffffff)/16777216.f;}
 inline Point weighted_select(const Entity& e,u64 w,u64 h,float roll,float limit=1e30f,int preferred=-1,bool require_visibility=true){
-    Point none;if((require_visibility&&!e.visible)||e.stealthed||e.invuln||e.bullet_invuln||(snap.backend_managed&&!e.modifiers_valid))return none;
+    Point none;if((require_visibility&&(!e.visible||!clearance_current(e)))||e.stealthed||e.invuln||e.bullet_invuln||(decision_frame::managed()&&!e.modifiers_valid))return none;
     std::array<Point,bone_count> points{};std::array<float,bone_count> weights{};float total=0;
     Vec2 center{w*.5f,h*.5f};
     for(int i=0;i<bone_count;i++){
-        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(snap.backend_managed&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
+        int priority=cfg.I(key(i).c_str());if(i==4||i==5||priority<0||(decision_frame::managed()&&require_visibility&&(!e.bone_visibility_known[i]||!e.bone_visible[i])))continue;
         Vec3 world;if(!region_world(e,i,world))continue;auto p=world_to_screen(world,w,h);if(!on_screen(p,(float)w,(float)h))continue;
         float distance=(p-center).len();if(distance>limit)continue;
         points[i]={p,i,priority,distance};

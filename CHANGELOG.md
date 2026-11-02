@@ -12,6 +12,30 @@ Each entry must record:
 
 Keep previous entries as history; append corrections in a newer entry. Do not invent historical changes, successful tests, offset discovery, performance improvements, or hardware results.
 
+## 2026-11-02 — Update 010: review repairs compiled and locked package built
+
+**Changed:** Completed the review follow-up build and updated the current verification record. The test package is `ACE-miniPC-20261102T133036Z.zip`. Source and executable both cover **117 blocks**, build ID `20261102T133036Z-46678c9295`; loader SHA-256 is `4c7b70aced1c8f64bc4eb89ebafe4b2524cb01238391907d57a90f6d45d2be3b`. Source/log upload and package integrity verification follow this build.
+
+**State:** Applied, compiled and packaged. No live hardware result is claimed. This is the generic output/frame/retry/build follow-up, not the separate unintegrated skeleton proposal.
+
+**Verification:** Complete `-CompileOnly` validation succeeded: 34 syntax/static-assert fixture units and 11 linked regression suites, with zero test executables run. Five isolated file-only runtime-guard cases accepted the full approved set and rejected each missing DLL and a modified DLL; these checks never loaded a DLL or ran the product. The one-click build completed with exit code 0, validated the entire 7,201-file compiler tree against its locked archive before/after compilation, verified all three runtime DLLs against pinned hashes and prepared snapshots, and checked their packaged copies. The product/development copies match the fresh passed receipt. Existing Winsock include-order warnings remain.
+
+**Limitations:** The serial worker, cancellation, frame consistency and restored-map behavior have compiler/static evidence, not runtime or hardware proof. Runtime assertions in source-only fixture bodies remain unexecuted. Content-pinned dependencies do not prove upstream compiler signatures or bit-identical future executables; compiler checksum provenance is recorded in the readable lock. Manual diagnostic tests remain synchronous. Full skeletons/chams, other game backends, live offset discovery and complete cooldown replication are still absent.
+
+**Next:** Test this build on the mini PC with input latency/spacing enabled, Trigger clicks, panic/pause/reconnect and map changes. Check render timing, queued-output status including uncertain release faults, native-joint/visibility diagnostics and map-retry status. Collect the full new log. Do not label the repair hardware-verified or tune away identity/freshness checks without evidence.
+
+## 2026-11-02 — Update 009: static-review follow-up applied, validation pending
+
+**Changed:** Compared the pasted review's `e0fa5dd` baseline with the newer uploaded source and recorded per-finding status in `verification/review-followup.md`. Applied bounded asynchronous automatic output, cancellation/expiry and release-fault handling; coherent owned Aim/Trigger decision snapshots; geometry-revision-bound visibility; same-map failed-load retry; complete runtime packaging and pinned dependency acquisition/content checks; corrected health-rendering fixture expectations and truthful test summaries. Reconnect key/button requests are serviced by the lifecycle worker and device status text is published without a shared mutable string. Preserved existing source/data validation and supplied dependency versions.
+
+**State:** Applied source contains **117 complete blocks**, matched to `src`; the previous 114-block test executable is still the old build until a new build succeeds. The earlier full-skeleton proposal remains unintegrated. No product or test executable was run.
+
+**Verification:** Initial combined syntax compilation passed for changed action/input/map/render-test paths and compiler-evaluated queue/retry policies. The new queue received a second static review after fixing chord ordering, partial-write handling, popped-request cancellation and uncertain-release recovery. Exact local compiler/runtime archives and installed files were inspected and hashed; the installed compiler's 7,201 files match its retained archive. Complete compile-only regression validation and the product build remain pending. Upstream MemProcFS metadata corroborates its archive digest; the compiler archive digest is locally measured and that provenance limit is explicit in the lock.
+
+**Limitations:** Compilation/static review does not prove timing, physical button release or hardware compatibility. A failed serial release produces a sticky fault and disables automatic acceptance; reconnect attempts owed releases, with status reporting uncertain delivery. Movement coalescing retains the latest unsent counts and original deadline; queue acceptance is not proof of delivery. Manual diagnostic device operations remain synchronous. Source-only fixtures' runtime assertions remain unexecuted. Legacy item/defense algorithms, full skeletons/chams, other games and new offsets are not implemented by this update.
+
+**Next:** Complete compile-only checks and pinned build/packaging verification, record a fresh build identity, upload the source/log changes and prepare a new mini-PC package. Then validate action/render timing, held-button cancellation, map-asset restoration and native visibility using that exact build and its complete log. Do not describe source upload or compilation as live success.
+
 ## 2026-11-02 — Update 008: repaired source uploaded and test ZIP verified
 
 **Changed:** Uploaded the completed source repairs and validation notes to `3sc4re-eng/idk`, source-repair commit `7e484ad` on `main`. The repository now contains 194 maintained files, including the two added compile-only fixture sources. Recorded the delivery evidence in this follow-up entry.

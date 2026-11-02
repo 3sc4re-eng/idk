@@ -1,3 +1,4 @@
+#include "decision_frame.h"
 #include "entities.h"
 #include "dma.h"
 #include "hero_catalog.h"
@@ -37,8 +38,9 @@ bool consume_attach_recovery(){
 const char* hero_name_by_id(u32 id){return current_hero_name(id);}
 bool game_key_state(int key,bool& held){
     held=false;if(key<1||key>255)return false;
-    if(!snap.backend_managed){held=(GetAsyncKeyState(key)&0x8000)!=0;return true;}
+    if(!decision_frame::managed()){held=(GetAsyncKeyState(key)&0x8000)!=0;return true;}
     if(key==VK_LBUTTON||key==VK_RBUTTON||key==VK_MBUTTON||key==VK_XBUTTON1||key==VK_XBUTTON2)return hw::physical_mouse_state(key,held);
+    if(const auto* frame=decision_frame::active()){if(!frame->input_valid||!frame->fresh(now_ms()))return false;held=frame->game_keys[key];return true;}
     std::lock_guard<std::mutex> lock(snap_mtx);if(!snap.input_valid||now_ms()-snap.last_read_ms.load()>250)return false;held=snap.game_keys[key];return true;
 }
 bool game_key_down(int key){bool held=false;return game_key_state(key,held)&&held;}
@@ -55,6 +57,14 @@ action_pause_policy::Preferences configured_action_pause_preferences(){
     return p;
 }
 static action_pause_policy::Reason current_action_gate(){
+    if(const auto* frame=decision_frame::active()){
+        action_pause_policy::Observations observed;observed.managed=frame->managed;
+        observed.snapshot_valid=frame->frame_valid&&frame->action_valid&&(!frame->managed||(frame->binding_epoch&&frame->binding_epoch==mem.attachment_epoch()));
+        observed.input_valid=frame->input_valid;observed.fresh=frame->fresh(now_ms());observed.in_match=frame->in_match;
+        observed.life_known=frame->life_known;observed.dead=frame->dead;observed.scoreboard=frame->scoreboard;observed.spectator=frame->spectating;
+        observed.raw_ui_readable=frame->raw_ui_valid;observed.raw_ui_flags=frame->raw_ui_flags;observed.ace_menu_open=frame->ace_menu_open;
+        return action_pause_policy::evaluate(configured_action_pause_preferences(),observed);
+    }
     action_pause_policy::Observations s;
     const auto at=snap.last_read_ms.load(),now=now_ms();
     s.managed=snap.backend_managed;s.snapshot_valid=snap.frame_valid&&snap.action_valid;s.input_valid=snap.input_valid;
@@ -96,7 +106,7 @@ static void publish(live_backend::Frame&& f){
         return answer;
     };
     auto visibility=[&](std::vector<Entity>& targets,bool allied,bool npc){for(auto& e:targets){
-        const bool team_known=npc||allied||e.visibility_known;e.team_visible=npc||allied?true:e.visible;e.bone_visible.fill(false);e.bone_visibility_known.fill(false);
+        const bool team_known=npc||allied||e.visibility_known;e.team_visible=npc||allied?true:e.visible;e.bone_visible.fill(false);e.bone_visibility_known.fill(false);e.visibility_scene=e.visibility_obstacles=e.visibility_sample_ms=0;
         // Team FOW can reject a target. A positive FOW flag never proves local LOS.
         if(!camera_valid||!team_known||!e.team_visible){
             e.occlusion_valid=false;e.visible=false;e.visibility_known=team_known&&!e.team_visible;visible_times.erase(e.handle);continue;
@@ -111,6 +121,7 @@ static void publish(live_backend::Frame&& f){
             auto ray=ray_visibility(point);e.bone_visibility_known[i]=ray.known;any_known|=ray.known;e.bone_visible[i]=ray.known&&ray.clear;any|=e.bone_visible[i];
         }
         e.occlusion_valid=any_known;e.visible=e.team_visible&&any;e.visibility_known=team_known&&any_known;
+        if(any_known){e.visibility_scene=collision_revision.scene;e.visibility_obstacles=collision_revision.obstacles;e.visibility_sample_ms=now_ms();}
         if(e.visible&&on_screen){auto& times=visible_times[e.handle];if(!times.first||f.time-times.second>250)times.first=f.time;times.second=f.time;e.visible_since=times.first;}else visible_times.erase(e.handle);
     }};visibility(f.enemies,false,false);visibility(f.friendlies,true,false);
     {profile_scope::ActiveScope hero_settings(f.local);if(native_target::supports_entity(EClass::NPC)&&(cfg.B("aim.target_minions")||cfg.B("aim.target_neutrals")))visibility(f.npcs,false,true);}
@@ -163,6 +174,7 @@ void entity_thread_start(){
 }
 void entity_thread_stop(){mem.invalidate_attachment_epoch();snap.native_binding_epoch=0;snap.frame_valid=false;bool was_running=reader_running.exchange(false);if(reader_thread.joinable())reader_thread.join();snap.read_hz=0;snap.read_hz_exact=0;snap.poll_ms=0;snap.publish_ms=0;snap.scan_ms=0;snap.discovery_completed_ms=0;snap.discovery_interval_ms=0;snap.discovery_pages_read=0;snap.discovery_pages_unavailable=0;snap.discovery_accepted=0;snap.discovery_pawns=0;snap.discovery_controllers=0;if(!was_running)return;live_backend::Frame empty;empty.time=now_ms();empty.status="Reader stopped";publish(std::move(empty));}
 Vec2 world_to_screen(Vec3 point,u64 width,u64 height){
+    if(const auto* frame=decision_frame::active())return frame->project(point,width,height);
     float m[16];{std::lock_guard<std::mutex> guard(snap_mtx);std::copy(std::begin(snap.view),std::end(snap.view),m);}
     float w=point.x*m[12]+point.y*m[13]+point.z*m[14]+m[15];if(!std::isfinite(w)||w<.01f)return {-99999,-99999};
     float x=point.x*m[0]+point.y*m[1]+point.z*m[2]+m[3],y=point.x*m[4]+point.y*m[5]+point.z*m[6]+m[7];

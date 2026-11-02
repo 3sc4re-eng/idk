@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "baseline": "Existing local dependency bytes observed 2026-11-02",
+  "provenance": {
+    "compiler": "Versioned asset is listed on the official WinLibs GitHub release. Expected archive SHA256 was measured locally; upstream checksum text could not be retrieved by the web tool.",
+    "runtime": "Official MemProcFS v5.19 expanded-assets metadata advertises the same SHA256 as the retained local archive.",
+    "source_files": "Versioned URLs are already used by the current build; expected individual SHA256 values were measured from current local bytes.",
+    "limitations": "Content lock and fail-closed acquisition. No new archive was downloaded or executed. This does not prove full bit-for-bit build reproducibility, upstream signatures, hardware operation, or that prior tests used these exact bytes."
+  },
+  "compiler": {
+    "version": "GCC 14.0.0-snapshot20231217 / MinGW-w64 MSVCRT 11.0.1-r1",
+    "archive_path": "tools/compiler.zip",
+    "url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-14.0.0-snapshot20231217-mingw-w64msvcrt-11.0.1-r1.zip",
+    "bytes": 197015246,
+    "sha256": "462d67f17fd99a7c749056712a3afff27a0f794b256af9f69d15ac8418630d56",
+    "installed_directory": "tools/mingw64",
+    "executable_path": "tools/mingw64/bin/g++.exe",
+    "executable_sha256": "8a4a2f65a6b6e7ae70ab4b68ca4238188dbea382f1d24f4ae6c83ee8bee33016",
+    "release_page": "https://github.com/brechtsanders/winlibs_mingw/releases/tag/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1",
+    "assets_page": "https://github.com/brechtsanders/winlibs_mingw/releases/expanded_assets/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1",
+    "upstream_digest_correlated": false
+  },
+  "runtime": {
+    "version": "MemProcFS 5.19.0 / LeechCore 2.23.4.104 / FTD3XX 1.3.0.10",
+    "archive_path": "vmm_pack.zip",
+    "url": "https://github.com/ufrisk/MemProcFS/releases/download/v5.19/MemProcFS_files_and_binaries_v5.19.0-win_x64-20261014.zip",
+    "bytes": 6737710,
+    "sha256": "5dc42673f35371e309b2c3f5c302556489897451a90905061035b630239d3ca9",
+    "release_page": "https://github.com/ufrisk/MemProcFS/releases/tag/v5.19",
+    "assets_page": "https://github.com/ufrisk/MemProcFS/releases/expanded_assets/v5.19",
+    "upstream_digest_correlated": true,
+    "files": [
+      {
+        "path": "vmm.dll",
+        "bytes": 2628552,
+        "sha256": "1bfa5e308f18b61d38f9471aad5d2801410cae608e3e274242e7e788838a12df",
+        "file_version": "5.19.0.251"
+      },
+      {
+        "path": "leechcore.dll",
+        "bytes": 180680,
+        "sha256": "87b69a036772e58d6d9297982f6029d02ea0dbaf98c91f366e3fbb28f6045673",
+        "file_version": "2.23.4.104"
+      },
+      {
+        "path": "ftd3xx.dll",
+        "bytes": 513928,
+        "sha256": "3c0fc158fd4aa604c526d58ed8274ae830d53e69e01210cc5b5fa54ec5a9b7c0",
+        "file_version": "1.3.0.10"
+      }
+    ]
+  },
+  "source_files": [
+    {
+      "path": "deps/json.hpp",
+      "url": "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp",
+      "bytes": 919975,
+      "sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6"
+    },
+    {
+      "path": "deps/imgui/imgui.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui.cpp",
+      "bytes": 803634,
+      "sha256": "594831847b5e0c95d15554c61c47a9e204d9ce87deed0b504e9c661a31bdb28c"
+    },
+    {
+      "path": "deps/imgui/imgui.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui.h",
+      "bytes": 328809,
+      "sha256": "8470a6ba7841f0f2ddd50e137005079b27d6f61021c5372a72a628e6d8d27f08"
+    },
+    {
+      "path": "deps/imgui/imgui_internal.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_internal.h",
+      "bytes": 262687,
+      "sha256": "8304c957f0452f01d23ea951f39e9a94ddb61cd63f26f2ce8c6e5dc44d199d90"
+    },
+    {
+      "path": "deps/imgui/imgui_draw.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_draw.cpp",
+      "bytes": 221080,
+      "sha256": "8f4867550086b3bd8444f232098b85a526c27dafb4df7ade772bc73cf8c217ec"
+    },
+    {
+      "path": "deps/imgui/imgui_tables.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_tables.cpp",
+      "bytes": 237948,
+      "sha256": "f2ed29a8eb6ef19883a80bf1727120ed2962c0a28e584d4cf70f34f8d061f567"
+    },
+    {
+      "path": "deps/imgui/imgui_widgets.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_widgets.cpp",
+      "bytes": 443296,
+      "sha256": "9d8a13aae4a217966cdbfc784bec4b9b2abe9bc2290a8ddffd2c4d117b2917bb"
+    },
+    {
+      "path": "deps/imgui/imconfig.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imconfig.h",
+      "bytes": 10507,
+      "sha256": "a253e82c1960f8aa7594a51a8ac606a6235738c923f12d67a7742e88bf07ed63"
+    },
+    {
+      "path": "deps/imgui/imstb_rectpack.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_rectpack.h",
+      "bytes": 20344,
+      "sha256": "2efa3d5f7d003c19743b15155dad9f46d9f9fc783a18893d703b431d3c990972"
+    },
+    {
+      "path": "deps/imgui/imstb_textedit.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_textedit.h",
+      "bytes": 55207,
+      "sha256": "6cb9de88e714f42bdbdc25ba190f01e346a2b6eba727c2044acccc7e70966c70"
+    },
+    {
+      "path": "deps/imgui/imstb_truetype.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_truetype.h",
+      "bytes": 199484,
+      "sha256": "5b7693f174b0458c7bec5522c8d6be4fe606d3f5da5082351959c14e59269b53"
+    },
+    {
+      "path": "deps/imgui/backends/imgui_impl_dx11.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_dx11.cpp",
+      "bytes": 29334,
+      "sha256": "c568d1637e5c0b53f74ebc5ad527050e39183da53b95bb215139b138ff80be57"
+    },
+    {
+      "path": "deps/imgui/backends/imgui_impl_dx11.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_dx11.h",
+      "bytes": 1538,
+      "sha256": "f9d3d41f7db6d9e8f380fdd05b62c6ddaec6c5813ffa879e541816f49a50c1b8"
+    },
+    {
+      "path": "deps/imgui/backends/imgui_impl_win32.cpp",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_win32.cpp",
+      "bytes": 46165,
+      "sha256": "677ed71e7d7d44cf0693ecd6a480366121885e7c1ee19ae3bdd7d6a5ea230a2f"
+    },
+    {
+      "path": "deps/imgui/backends/imgui_impl_win32.h",
+      "url": "https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_win32.h",
+      "bytes": 3433,
+      "sha256": "02e1762148172d480cfdef1dab08ee7255ffade2a445379fdd005a301bf28214"
+    }
+  ]
+}

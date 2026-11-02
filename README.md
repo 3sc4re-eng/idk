@@ -8,6 +8,8 @@ Read [CHANGELOG.md](CHANGELOG.md) for the actual implementation state, limitatio
 
 Only Deadlock currently has a live backend. Full skeletal rendering, animated mesh effects, remote authentication/licensing and other game backends are not delivered features. The 118-file proposal discussed in the changelog is staged outside this project and is not part of this source snapshot.
 
+The build now embeds versioned dependency URLs and content digests, verifies the installed compiler against its retained locked archive, and requires the complete approved runtime DLL set. [The readable lock](verification/dependency-lock.json) records exact versions and provenance limits. Content pinning is distinct from upstream signing and bit-for-bit executable reproducibility.
+
 Do not run the product or compiled regression binaries on the development PC. Hardware/runtime validation belongs on the user's mini PC. Source inspection and compile-only checks must be distinguished from runtime results.
 
 The build may obtain missing compiler, UI and DMA dependencies. Runtime DLLs, accounts, licenses, local profiles, logs and executables are excluded from this source repository. No CI workflow is configured to run hardware or input-device paths.

@@ -1,6 +1,10 @@
+#include "decision_frame.h"
 #include "entities.h"
 #include "km_protocol.h"
 #include "input.h"
+#include "dma.h"
+#include "decision_frame.h"
+#include <condition_variable>
 #include "input_timing.h"
 #include "makcu_serial_parser.h"
 #include <array>
@@ -18,6 +22,7 @@ static std::recursive_mutex connection_mutex;
 static HANDLE serial=INVALID_HANDLE_VALUE;static std::atomic<u64> serial_sent{0},serial_failed{0};
 static makcu_serial::Parser serial_parser;static bool serial_query_synchronized=false;static std::atomic<bool> device_is_makcu{false};static std::atomic<u64> seen_stream_events{0};
 static void stop_mouse_monitor();static void start_mouse_monitor();
+static void quiesce_output();static void connected_output();
 static bool open_port(int com,int baud=115200){
     std::lock_guard<std::recursive_mutex> lock(serial_mutex);
     serial_parser.reset();serial_query_synchronized=false;device_is_makcu=false;seen_stream_events=0;
@@ -42,6 +47,7 @@ static bool open_port(int com,int baud=115200){
 }
 static void close_port(){
     stop_mouse_monitor();
+    quiesce_output(); // drain owed releases before locking/closing the handle
     std::lock_guard<std::recursive_mutex> lock(serial_mutex);inp.device_ok=false;inp.keyboard_ok=false;inp.keyboard_api=false;device_is_makcu=false;
     if(serial!=INVALID_HANDLE_VALUE) CloseHandle(serial);
     serial=INVALID_HANDLE_VALUE;
@@ -202,7 +208,7 @@ std::string physical_mouse_status(){
         if(index)text+=" / ";text+=names[index];text+=known?(held?": held":": released"): ": unknown";
     }return text+" / cycle "+std::to_string(monitor.cycle_ms.load())+" ms";
 }
-std::string diagnostic_summary(){return std::string("device=")+(inp.device_ok?"connected":"disconnected")+" panic="+(inp.panic?"on":"off")+" output="+(cfg.I("input.mode")==2?"disabled":"selected device")+" | "+physical_mouse_status()+" | serial command writes="+std::to_string(serial_sent.load())+" failures="+std::to_string(serial_failed.load());}
+std::string diagnostic_summary(){return std::string("device=")+(inp.device_ok?"connected":"disconnected")+" panic="+(inp.panic?"on":"off")+" output="+(cfg.I("input.mode")==2?"disabled":"selected device")+" | "+physical_mouse_status()+" | serial command writes="+std::to_string(serial_sent.load())+" failures="+std::to_string(serial_failed.load())+" | "+automatic_output_status();}
 static std::mutex diagnostic_mutex;static std::string keyboard_message="Keyboard output not tested";static u64 keyboard_test_started=0;static int keyboard_test_key=0;
 std::string keyboard_status(){std::lock_guard<std::mutex> lock(diagnostic_mutex);return keyboard_message;}
 bool can_send(int key){if(!Settings::action_output_key_allowed(key))return false;bool mouse=key==VK_LBUTTON||key==VK_RBUTTON||key==VK_MBUTTON||key==VK_XBUTTON1||key==VK_XBUTTON2;return inp.device_ok&&(mouse||(inp.keyboard_ok&&km_protocol::hid(key)>=0));}
@@ -221,8 +227,11 @@ void update_diagnostics(){
     else if(now_ms()-keyboard_test_started>1200){inp.keyboard_ok=false;keyboard_test_started=0;keyboard_message="Keyboard delivery not observed; keyboard actions remain disabled";}
 }
 Vec2 screen_to_counts(Vec2 pixels,u64 width,u64 height,float dt,float max_turn){
-    if(!snap.backend_managed)return pixels;float sensitivity=cfg.F("input.sensitivity"),adjust=1,fx=1,fy=1;
-    {std::lock_guard<std::mutex> lock(snap_mtx);if(cfg.B("input.auto_sensitivity")){sensitivity=snap.sensitivity;adjust=snap.fov_sensitivity;}
+    if(!decision_frame::managed())return pixels;float sensitivity=cfg.F("input.sensitivity"),adjust=1,fx=1,fy=1;
+    if(const auto* frame=decision_frame::active()){
+        if(cfg.B("input.auto_sensitivity")){sensitivity=frame->sensitivity;adjust=frame->fov_sensitivity;}
+        fx=frame->projection_x();fy=std::sqrt(frame->view[4]*frame->view[4]+frame->view[5]*frame->view[5]+frame->view[6]*frame->view[6]);
+    }else{std::lock_guard<std::mutex> lock(snap_mtx);if(cfg.B("input.auto_sensitivity")){sensitivity=snap.sensitivity;adjust=snap.fov_sensitivity;}
         fx=std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);fy=std::sqrt(snap.view[4]*snap.view[4]+snap.view[5]*snap.view[5]+snap.view[6]*snap.view[6]);}
     float x=cfg.F("input.yaw")*sensitivity*adjust,y=cfg.F("input.pitch")*sensitivity*adjust;if(x<=0||y<=0||fx<1e-5f||fy<1e-5f||!width||!height)return {};
     Vec2 angle{rad2deg(std::atan2(pixels.x,width*.5f*fx)),rad2deg(std::atan2(pixels.y,height*.5f*fy))};float limit=max_turn*clampf(dt,0,.067f);if(limit>0&&angle.len()>limit)angle=angle*(limit/angle.len());Vec2 counts{angle.x/x,angle.y/y};if(!std::isfinite(counts.len()))return {};return {clampf(counts.x,-32767,32767),clampf(counts.y,-32767,32767)};
@@ -232,9 +241,12 @@ Vec2 guided_move(Vec2 error,aim_model::Movement& state,u64 width,u64 height,floa
     const float smooth=aim_model::smoothing_factor(cfg.F(key("aim.smooth","trigger.magnet_smooth")));
     const float strength=cfg.F(key("aim.strength","trigger.magnet_strength"))/100.f;
     const int curve=cfg.I(key("aim.curve","trigger.magnet_curve"));
-    if(!snap.backend_managed)return aim_model::consistent_motion(error,state,smooth,curve,dt,strength);
+    if(!decision_frame::managed())return aim_model::consistent_motion(error,state,smooth,curve,dt,strength);
     float fx=0,fy=0,sensitivity=cfg.F("input.sensitivity"),adjust=1;
-    {std::lock_guard<std::mutex> lock(snap_mtx);
+    if(const auto* frame=decision_frame::active()){
+        fx=frame->projection_x();fy=std::sqrt(frame->view[4]*frame->view[4]+frame->view[5]*frame->view[5]+frame->view[6]*frame->view[6]);
+        if(cfg.B("input.auto_sensitivity")){sensitivity=frame->sensitivity;adjust=frame->fov_sensitivity;}
+    }else{std::lock_guard<std::mutex> lock(snap_mtx);
         fx=std::sqrt(snap.view[0]*snap.view[0]+snap.view[1]*snap.view[1]+snap.view[2]*snap.view[2]);
         fy=std::sqrt(snap.view[4]*snap.view[4]+snap.view[5]*snap.view[5]+snap.view[6]*snap.view[6]);
         if(cfg.B("input.auto_sensitivity")){sensitivity=snap.sensitivity;adjust=snap.fov_sensitivity;}
@@ -248,11 +260,6 @@ Vec2 guided_move(Vec2 error,aim_model::Movement& state,u64 width,u64 height,floa
     return {clampf(counts.x,-32767,32767),clampf(counts.y,-32767,32767)};
 }
 static bool output_blocked();
-static bool output_interval(){
-    if(output_blocked())return false;
-    static input_timing::Schedule schedule;u64 now=now_ms(),ready=schedule.ready_at(now,(unsigned)cfg.I("input.latency_ms"),(unsigned)cfg.I("input.delay_ms"));
-    if(ready>now)Sleep((DWORD)(ready-now));if(output_blocked())return false;schedule.sent(now_ms());return true;
-}
 
 std::string test_connection(){std::lock_guard<std::recursive_mutex> connection(connection_mutex);if(!inp.device_ok)return "No connected input device";bool keyboard_verified=inp.keyboard_ok;bool responded=ping_device();if(responded&&keyboard_verified&&inp.keyboard_api)inp.keyboard_ok=true;if(responded&&device_is_makcu&&!physical_monitor().run)start_mouse_monitor();return responded?"Serial output device responded; physical buttons are verified separately":"Device did not respond";}
 std::string test_mouse(){if(!inp.device_ok||cfg.I("input.mode")==2)return "No connected output device";if(inp.panic)return "Mouse test paused by the panic key";
@@ -273,8 +280,8 @@ bool init(){
     if(wanted>0){
         if(try_port(wanted)){
             inp.device_ok=true;
-            inp.device_text=std::string("COM")+std::to_string(wanted)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
-            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();
+            inp.set_device_text(std::string("COM")+std::to_string(wanted)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)");
+            plat_stage("input",inp.device_status());plat_log("Input OK: %s",inp.device_status().c_str());start_mouse_monitor();connected_output();
             return true;
         }
         close_port();
@@ -286,9 +293,9 @@ bool init(){
         if(c==wanted) continue;
         if(try_port(c)){
             inp.device_ok=true;
-            inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
+            inp.set_device_text(std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)");
             cfg.set_int_if_unchanged("input.com",c,{{"input.com",cfg.I("input.com")},{"input.baud",cfg.I("input.baud")},{"input.mode",cfg.I("input.mode")}},false);
-            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();
+            plat_stage("input",inp.device_status());plat_log("Input OK: %s",inp.device_status().c_str());start_mouse_monitor();connected_output();
             return true;
         }
         close_port();
@@ -296,16 +303,16 @@ bool init(){
     if(ports.empty()){
         plat_log("No COM ports enumerated; probing COM1-COM32 directly, excluding known Bluetooth ports");
         for(int c=1;c<=32;c++)if(c!=wanted&&possible_unlisted_port(c)&&try_port(c)){
-            inp.device_ok=true;inp.device_text=std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)";
+            inp.device_ok=true;inp.set_device_text(std::string("COM")+std::to_string(c)+" @ "+std::to_string(inp.baud_rate)+" baud (verified)");
             cfg.set_int_if_unchanged("input.com",c,{{"input.com",cfg.I("input.com")},{"input.baud",cfg.I("input.baud")},{"input.mode",cfg.I("input.mode")}},false);
-            plat_stage("input",inp.device_text);plat_log("Input OK: %s",inp.device_text.c_str());start_mouse_monitor();return true;
+            plat_stage("input",inp.device_status());plat_log("Input OK: %s",inp.device_status().c_str());start_mouse_monitor();connected_output();return true;
         }
     }
-    inp.device_ok=false;inp.device_text=ports.empty()?"No serial COM ports found":"No COM device answered Makcu/KMBox probe";
-    plat_stage("input",inp.device_text);plat_log("Input device not connected: %s",inp.device_text.c_str());
+    inp.device_ok=false;inp.set_device_text(ports.empty()?"No serial COM ports found":"No COM device answered Makcu/KMBox probe");
+    plat_stage("input",inp.device_status());plat_log("Input device not connected: %s",inp.device_status().c_str());
     return false;
 }
-void disconnect(){std::lock_guard<std::recursive_mutex> connection(connection_mutex);close_port();inp.device_ok=false;inp.device_text="Disconnected";plat_log("Input device disconnected by user");}
+void disconnect(){std::lock_guard<std::recursive_mutex> connection(connection_mutex);close_port();inp.device_ok=false;inp.set_device_text("Disconnected");plat_log("Input device disconnected by user");}
 void reconnect(){
     std::lock_guard<std::recursive_mutex> connection(connection_mutex);
     close_port(); inp.device_ok=false;
@@ -318,29 +325,220 @@ static bool send_button(int b,bool down){
     const char* name=b==0?"left":b==1?"right":b==2?"middle":b==4?"side1":"side2";
     return wr("km.%s(%d)\r\n",name,down?1:0);
 }
-void mouse_move(int dx,int dy){if(!output_interval())return;wr("km.move(%d,%d)\r\n",dx,dy);}
-void mouse_down(int b){if(output_interval())send_button(b,true);}
-// Releases never wait for added latency or the output gate, so pausing cannot strand a generated press.
-void mouse_up(int b){send_button(b,false);}
-void mouse_click(int b,int ms){if(!output_interval())return;send_button(b,true);Sleep((DWORD)std::clamp(ms,1,500));send_button(b,false);}
-void key_tap(int vk,int ms){
-    if(!Settings::action_output_key_allowed(vk))return;
-    ms=std::clamp(ms,1,500);
-    if(vk==VK_LBUTTON||vk==VK_RBUTTON||vk==VK_MBUTTON||vk==VK_XBUTTON1||vk==VK_XBUTTON2){int button=vk==VK_LBUTTON?0:vk==VK_RBUTTON?1:vk==VK_MBUTTON?2:vk==VK_XBUTTON1?4:5;mouse_click(button,ms);return;}
-    if(!inp.keyboard_ok)return;auto command=km_protocol::press(vk,ms);if(command.empty()||!output_interval())return;wr("%s",command.c_str());
+static int mouse_resource(int button){return button>=0&&button<=2?button:button==4?3:button==5?4:-1;}
+static int key_resource(int key){
+    switch(key){case VK_LBUTTON:return 0;case VK_RBUTTON:return 1;case VK_MBUTTON:return 2;case VK_XBUTTON1:return 3;case VK_XBUTTON2:return 4;}
+    int code=km_protocol::hid(key);return code>=0&&code<256?5+code:-1;
 }
-bool key_chord(int modifier,int key,int ms){
-    if(!Settings::action_output_key_allowed(modifier)||!Settings::action_output_key_allowed(key))return false;
-    if(!can_send(modifier)||!can_send(key)||!output_interval())return false;ms=std::clamp(ms,1,500);
-    auto button=[](int vk){return vk==VK_LBUTTON?0:vk==VK_RBUTTON?1:vk==VK_MBUTTON?2:vk==VK_XBUTTON1?4:vk==VK_XBUTTON2?5:-1;};
-    int first=button(modifier),second=button(key);
-    if(first>=0||second>=0){
-        bool down1=first>=0?send_button(first,true):wr("km.down(%d)\r\n",km_protocol::hid(modifier));
-        bool down2=second>=0?send_button(second,true):wr("km.down(%d)\r\n",km_protocol::hid(key));Sleep(ms);
-        bool up2=second>=0?send_button(second,false):wr("km.up(%d)\r\n",km_protocol::hid(key));
-        bool up1=first>=0?send_button(first,false):wr("km.up(%d)\r\n",km_protocol::hid(modifier));return down1&&down2&&up1&&up2;
+static bool send_resource(int resource,bool down){
+    if(resource<0||resource>=(int)output_queue::resource_count)return false;
+    if(resource<5)return send_button(resource<3?resource:resource+1,down);
+    return wr(down?"km.down(%d)\r\n":"km.up(%d)\r\n",resource-5);
+}
+static output_queue::Context output_context(bool connected){
+    Settings::ReadScope output_settings(cfg);
+    return {now_ms(),mem.attachment_epoch(),connected&&!inp.panic&&inp.device_ok,!output_blocked()};
+}
+class AutomaticOutput {
+    std::mutex mutex_;std::condition_variable wake_,drained_;std::thread worker_;
+    output_queue::Queue queue_;std::array<output_queue::Held,output_queue::resource_count> held_{};
+    std::array<bool,output_queue::resource_count> uncertain_{};
+    std::array<unsigned,3> release_buttons_{};
+    bool accepting_=false,connection_open_=false,recovery_pending_=false,stopping_=false,exited_=false;
+    u64 barrier_=0,drained_barrier_=0,last_sent_=0,press_order_=0;
+    std::atomic<u64> accepted_{0},coalesced_{0},rejected_{0},release_failed_{0};
+    std::atomic<unsigned> uncertain_count_{0};std::atomic<bool> fault_{false};
+    static void advance(u64& value){if(++value==0)++value;}
+    std::size_t held_count()const{std::size_t count=0;for(const auto& held:held_)count+=held.active;return count;}
+    void release(int resource){
+        auto& held=held_[(size_t)resource];
+        // Release writes bypass permission/activity checks. Failed delivery is
+        // retried twice while the handle remains open, without a render wait.
+        if(send_resource(resource,false)){held={};return;}
+        ++release_failed_;
+        if(++held.release_failures<3){held.release_ms=now_ms()+5;return;}
+        plat_log("Automatic output: release delivery uncertain after three attempts, resource=%d; output disabled until reconnect clears owed releases",resource);
+        if(!uncertain_[(size_t)resource]){uncertain_[(size_t)resource]=true;++uncertain_count_;}held={};fault_=true;
+        std::lock_guard lock(mutex_);accepting_=false;queue_.cancel_all();
     }
-    auto down=km_protocol::chord(modifier,key,true),up=km_protocol::chord(modifier,key,false);if(down.empty()||up.empty())return false;
-    bool pressed=wr("%s",down.c_str());Sleep(ms);bool released=wr("%s",up.c_str());return pressed&&released;
+    bool revalidate(const output_queue::Request& request){
+        auto context=output_context(true);std::lock_guard lock(mutex_);context.connected=context.connected&&accepting_&&!stopping_;
+        return queue_.valid(request,context);
+    }
+    bool press(int resource,const output_queue::Request& request,u64 duration){
+        // Recheck after serial contention, immediately before the write. Queue
+        // locking ends inside revalidate(); no queue mutex spans device I/O.
+        std::lock_guard<std::recursive_mutex> serial_lock(serial_mutex);
+        if(!revalidate(request))return false;
+        advance(press_order_);auto& held=held_[(size_t)resource];held={true,request.origin,request.generation,request.attachment,0,press_order_,0};
+        // Track before attempting a write: a partial/failed write may still
+        // have pressed the control and therefore always earns an up attempt.
+        bool sent=send_resource(resource,true);held.release_ms=!sent?now_ms():(duration?now_ms()+duration:0);return sent;
+    }
+    void dispatch(const output_queue::Request& request){
+        if(!revalidate(request))return;
+        if(request.kind==output_queue::Kind::Move){
+            std::lock_guard<std::recursive_mutex> serial_lock(serial_mutex);if(!revalidate(request))return;
+            wr("km.move(%d,%d)\r\n",request.first,request.second);last_sent_=now_ms();return;
+        }
+        const int first=request.first,second=request.second;
+        if(first<0||first>=(int)held_.size()||held_[(size_t)first].active)return;
+        const bool chord=request.kind==output_queue::Kind::Chord;
+        if(chord&&(second<0||second>=(int)held_.size()||second==first||held_[(size_t)second].active))return;
+        if(held_count()+(chord?2:1)>output_queue::max_held)return;
+        if((first>=5||(chord&&second>=5))&&!inp.keyboard_ok)return;
+        auto duration=request.kind==output_queue::Kind::Down||chord?u64(0):(u64)request.hold_ms;
+        bool first_sent=press(first,request,duration),second_sent=false;
+        // Cancellation/attachment replacement between the two down writes
+        // suppresses the second press; the first remains tracked for release.
+        if(chord&&first_sent)second_sent=press(second,request,0);
+        if(chord){
+            auto common_release=now_ms()+(u64)request.hold_ms;
+            if(first_sent&&held_[(size_t)first].active)held_[(size_t)first].release_ms=common_release;
+            if(second_sent&&held_[(size_t)second].active)held_[(size_t)second].release_ms=common_release;
+        }
+        last_sent_=now_ms();
+    }
+    void recover(){
+        // A newly verified existing connection must clear every uncertain up
+        // before admitting output. This runs on the worker, never the caller.
+        for(std::size_t resource=0;resource<uncertain_.size();++resource)if(uncertain_[resource]){
+            bool released=false;for(unsigned attempt=0;attempt<3&&!released;++attempt)released=send_resource((int)resource,false);
+            if(released){uncertain_[resource]=false;--uncertain_count_;}else ++release_failed_;
+        }
+        fault_=uncertain_count_.load()!=0;
+        {std::lock_guard lock(mutex_);accepting_=connection_open_&&!stopping_&&!fault_.load();}
+        if(fault_)plat_log("Automatic output remains disabled: reconnect could not clear %u uncertain releases",uncertain_count_.load());
+    }
+    void loop(){
+        for(;;){
+            bool accepting=false,recovery=false;{std::lock_guard lock(mutex_);accepting=accepting_;recovery=recovery_pending_;recovery_pending_=false;}
+            if(recovery){recover();continue;}
+            auto context=output_context(accepting);
+            std::array<bool,output_queue::resource_count> due{};std::array<unsigned,3> releases{};
+            {
+                std::lock_guard lock(mutex_);context.connected=context.connected&&accepting_&&!stopping_;
+                queue_.expire(context.now);if(!context.connected||!context.permitted)queue_.cancel_all();
+                releases=release_buttons_;release_buttons_={};
+                for(std::size_t resource=0;resource<held_.size();++resource){
+                    const auto& held=held_[resource];
+                    bool requested=held.active&&resource<5&&(releases[output_queue::owner(held.origin)]&(1u<<resource));
+                    due[resource]=requested||queue_.release_due(held,context);
+                }
+            }
+            std::array<int,output_queue::max_held> release_order{};std::size_t release_count=0;
+            for(std::size_t resource=0;resource<held_.size();++resource)if(due[resource])release_order[release_count++]=(int)resource;
+            // A chord releases in reverse press order when both controls are due.
+            std::sort(release_order.begin(),release_order.begin()+release_count,[&](int a,int b){return held_[(size_t)a].order>held_[(size_t)b].order;});
+            for(std::size_t index=0;index<release_count;++index)release(release_order[index]);
+            // Explicit up without tracked ownership is still delivered, unless
+            // another owner currently holds that resource.
+            for(unsigned owner=0;owner<3;++owner)for(unsigned resource=0;resource<5;++resource)
+                if((releases[owner]&(1u<<resource))&&!due[resource]&&!held_[resource].active)send_resource((int)resource,false);
+            output_queue::Request request;bool have=false,stop=false;
+            {
+                std::unique_lock lock(mutex_);
+                if(!accepting_&&held_count()==0&&release_buttons_==std::array<unsigned,3>{}){
+                    drained_barrier_=barrier_;drained_.notify_all();
+                }
+                stop=stopping_&&held_count()==0;
+                context.connected=context.connected&&accepting_&&!stopping_;
+                if(!stop)have=queue_.take(context,last_sent_,request);
+                if(!stop&&!have)wake_.wait_for(lock,std::chrono::milliseconds(5));
+            }
+            if(stop)return;if(have)dispatch(request);
+        }
+    }
+    void run()noexcept{
+        try{loop();}
+        catch(...){
+            // Unexpected worker failure must not silently leave a press owned.
+            for(std::size_t i=0;i<held_.size();++i)if(held_[i].active){bool released=false;try{released=send_resource((int)i,false);}catch(...){}
+                if(!released&&!uncertain_[i]){uncertain_[i]=true;++uncertain_count_;}held_[i]={};}
+            fault_=uncertain_count_.load()!=0;
+            std::lock_guard lock(mutex_);accepting_=false;stopping_=true;queue_.cancel_all();release_buttons_={};
+        }
+        std::lock_guard lock(mutex_);exited_=true;drained_barrier_=barrier_;drained_.notify_all();
+    }
+public:
+    ~AutomaticOutput(){shutdown();}
+    void connected(){
+        bool failed=false;
+        {std::lock_guard lock(mutex_);if(stopping_)return;
+            if(!worker_.joinable()){try{worker_=std::thread([this]{run();});}catch(...){failed=true;}}
+            accepting_=false;connection_open_=!failed&&worker_.joinable();recovery_pending_=connection_open_;
+        }
+        wake_.notify_one();if(failed)plat_log("Automatic output worker could not start; queued output remains disabled");
+    }
+    bool enqueue(output_queue::Request request){
+        auto context=output_context(true);Settings::ReadScope output_settings(cfg);
+        // Bind to the image that caused this command. Never restamp an old
+        // decision with a freshly replaced live attachment's identity.
+        if(const auto* image=decision_frame::active()){
+            context.attachment=image->binding_epoch;request.source_sample_ms=image->entity_sample_ms;
+            if(image->managed&&!request.source_sample_ms){++rejected_;return false;}
+        }
+        unsigned latency=(unsigned)std::clamp(cfg.I("input.latency_ms"),0,50),spacing=(unsigned)std::clamp(cfg.I("input.delay_ms"),0,20);
+        output_queue::Push result;
+        {std::lock_guard lock(mutex_);context.connected=context.connected&&accepting_&&!stopping_;queue_.expire(context.now);result=queue_.push(request,context,latency,spacing);}
+        if(result==output_queue::Push::Rejected){++rejected_;return false;}
+        ++accepted_;if(result==output_queue::Push::Coalesced)++coalesced_;wake_.notify_one();return true;
+    }
+    void activity(hw::Origin origin,bool active){
+        {std::lock_guard lock(mutex_);queue_.set_activity(origin,active,now_ms());}wake_.notify_one();
+    }
+    void cancel(hw::Origin origin){
+        {std::lock_guard lock(mutex_);queue_.cancel(origin);}wake_.notify_one();
+    }
+    void cancel_all(){
+        {std::lock_guard lock(mutex_);queue_.cancel_all();}wake_.notify_one();
+    }
+    void up(int resource,hw::Origin origin){
+        if(resource<0||resource>=5||!output_queue::valid_owner(origin))return;
+        {std::lock_guard lock(mutex_);if(!accepting_||stopping_)return;queue_.cancel_resource(origin,resource);release_buttons_[output_queue::owner(origin)]|=1u<<resource;}wake_.notify_one();
+    }
+    bool quiesce(){
+        std::unique_lock lock(mutex_);accepting_=false;connection_open_=false;recovery_pending_=false;queue_.cancel_all();advance(barrier_);auto requested=barrier_;
+        if(!worker_.joinable()||exited_){release_buttons_={};drained_barrier_=requested;return !fault_.load();}
+        wake_.notify_one();drained_.wait(lock,[&]{return drained_barrier_>=requested;});
+        return !fault_.load();
+    }
+    // Terminal host operation, after producers stop. No mutex/connection lock
+    // is held while joining. Reconnect uses quiesce(), never joins this worker.
+    void shutdown(){
+        {std::lock_guard lock(mutex_);accepting_=false;connection_open_=false;recovery_pending_=false;stopping_=true;queue_.cancel_all();advance(barrier_);}
+        wake_.notify_one();if(worker_.joinable())worker_.join();
+    }
+    std::string status()const{
+        return "async accepted="+std::to_string(accepted_.load())+" coalesced="+std::to_string(coalesced_.load())+" rejected="+std::to_string(rejected_.load())+" release-write-failures="+std::to_string(release_failed_.load())+" uncertain-releases="+std::to_string(uncertain_count_.load())+" fault="+(fault_.load()?"yes":"no");
+    }
+};
+static AutomaticOutput& automatic_output(){static AutomaticOutput value;return value;}
+static bool queue_output(output_queue::Kind kind,hw::Origin origin,int first,int second,int hold){
+    output_queue::Request request;request.kind=kind;request.origin=origin;request.first=first;request.second=second;request.hold_ms=std::clamp(hold,1,500);
+    return automatic_output().enqueue(request);
 }
+void mouse_move(int dx,int dy,Origin origin){if(dx||dy)queue_output(output_queue::Kind::Move,origin,dx,dy,0);}
+void mouse_down(int button,Origin origin){int resource=mouse_resource(button);if(resource>=0)queue_output(output_queue::Kind::Down,origin,resource,0,0);}
+void mouse_up(int button,Origin origin){automatic_output().up(mouse_resource(button),origin);}
+void mouse_click(int button,int ms,Origin origin){int resource=mouse_resource(button);if(resource>=0)queue_output(output_queue::Kind::Tap,origin,resource,0,ms);}
+void key_tap(int key,int ms,Origin origin){
+    if(!Settings::action_output_key_allowed(key)||!can_send(key))return;int resource=key_resource(key);
+    if(resource>=0)queue_output(output_queue::Kind::Tap,origin,resource,0,ms);
 }
+bool key_chord(int modifier,int key,int ms,Origin origin){
+    if(!Settings::action_output_key_allowed(modifier)||!Settings::action_output_key_allowed(key)||!can_send(modifier)||!can_send(key))return false;
+    int first=key_resource(modifier),second=key_resource(key);if(first<0||second<0||first==second)return false;
+    return queue_output(output_queue::Kind::Chord,origin,first,second,ms);
+}
+void set_activity(Origin origin,bool active){automatic_output().activity(origin,active);}
+void set_activity(bool aim_active,bool trigger_active){set_activity(Origin::Aim,aim_active);set_activity(Origin::Trigger,trigger_active);}
+void cancel(Origin origin){automatic_output().cancel(origin);}
+void cancel_all(){automatic_output().cancel_all();}
+void shutdown_output(){automatic_output().shutdown();}
+std::string automatic_output_status(){return automatic_output().status();}
+}
+// Connection code never waits while holding serial_mutex. The output worker
+// never acquires connection_mutex, so reconnect can quiesce it under that lock.
+static void quiesce_output(){if(!hw::automatic_output().quiesce())plat_log("Automatic output closure: release attempts completed with uncertain delivery; sticky fault retained for reconnect");}
+static void connected_output(){hw::automatic_output().connected();}

@@ -1,4 +1,5 @@
 #include "collision.h"
+#include "asset_loader_retry.h"
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0602
 #include <windows.h>
@@ -111,6 +112,7 @@ class NativeSceneLoader {
     std::condition_variable wake_;
     std::thread worker_;
     bool stopping_=false,requested_once_=false,pending_=false;
+    asset_loader_retry::State retry_;
     u64 generation_=0,published_generation_=0;
     GameMapKey requested_;
     std::string message_="Map collision not loaded";
@@ -147,6 +149,8 @@ class NativeSceneLoader {
                 if(stopping_)return;
                 obsolete=generation!=generation_||key!=requested_;
                 if(!obsolete){
+                    // A stale completion must not alter the current request's retry state.
+                    retry_.finish(loaded,now_ms());
                     if(loaded){scene_=std::move(next);published_generation_=generation;advance(revision_.scene);message_="Ready: "+label+": "+std::to_string(scene_->size())+" collision primitives";}
                     else{published_generation_=0;message_="Unavailable: "+label+": "+(error.empty()?"Collision load failed":error);}
                     report=message_;
@@ -166,7 +170,7 @@ public:
         std::string report;
         {
             std::lock_guard lock(mutex_);
-            if(stopping_||(requested_once_&&requested_==key))return;
+            if(stopping_||!retry_.accepts(requested_once_&&requested_==key,now_ms()))return;
             // Invalidate before scheduling I/O. Retired geometry cannot answer
             // queries for a new, empty, invalid or unsuccessfully loaded map.
             requested_once_=true;requested_=key;advance(generation_);advance(revision_.scene);published_generation_=0;
@@ -175,11 +179,14 @@ public:
             if(!obstacles_->empty()){obstacles_=std::make_shared<const std::vector<Obstacle>>();advance(revision_.obstacles);}
             const bool valid_key=!key.game_id.empty()&&key.game_id.size()<=64&&!key.map_id.empty()&&key.map_id.size()<=128;
             const auto* asset=valid_key?find_map_asset(key):nullptr;pending_=asset!=nullptr;
+            // Existing per-frame selection retries only failed registered assets,
+            // after the backoff; it never restarts a ready or in-flight load.
+            retry_.begin(pending_);
             const std::string label=key.game_id+"/"+key.map_id+" @"+std::to_string(key.build_revision);
             message_=key.map_id.empty()?"Unavailable: map not identified":(!asset?"Unavailable: no map geometry registered for "+label:"Loading: "+label);
             if(asset&&!worker_.joinable()){
                 try{worker_=std::thread([this]{run();});}
-                catch(const std::exception&){pending_=false;message_="Unavailable: map loader worker could not start";}
+                catch(...){pending_=false;retry_.finish(false,now_ms());message_="Unavailable: map loader worker could not start";}
             }
             report=message_;
         }
@@ -215,7 +222,7 @@ public:
         {
             std::lock_guard lock(mutex_);
             if(stopping_)return;
-            stopping_=true;pending_=false;advance(generation_);advance(revision_.scene);published_generation_=0;
+            stopping_=true;pending_=false;retry_.stop();advance(generation_);advance(revision_.scene);published_generation_=0;
             release=std::move(scene_);message_="Map collision stopped";
         }
         wake_.notify_all();if(worker_.joinable())worker_.join();

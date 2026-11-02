@@ -21,3 +21,4 @@
 /.ace-build.lock
 /.ace-build-result.json
 /.ace-extraction.json
+/.ace-dependency-*/

@@ -25,35 +25,10 @@ echo [1/7] Validating and staging source files...
 call :run_build_guard Extract
 if errorlevel 1 goto :fail
 
-echo [2/7] Checking compiler...
-set GCC=tools\mingw64\bin\g++.exe
-if not exist "%GCC%" for /f "delims=" %%D in ('dir /b /ad tools ^| findstr /i mingw') do set GCC=tools\%%D\bin\g++.exe
-if exist "%GCC%" (
-    echo       OK.
-) else (
-    if not exist tools mkdir tools
-    echo       downloading compiler - ONE TIME ONLY...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $out=@(); try{ $rels=Invoke-RestMethod -Uri 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases?per_page=100' }catch{ exit 1 }; foreach($r in $rels){ foreach($x in @($r.assets)){ if($x.name -like 'winlibs-x86_64-posix-seh-*.zip'){ $out += $x } } }; if($out.Count -eq 0){ exit 1 }; $a = $out | Sort-Object -Property size | Select-Object -First 1; Write-Host ('downloading '+$a.name); Invoke-WebRequest -Uri $a.browser_download_url -OutFile 'tools\compiler.zip'; exit 0" || goto :fail
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path 'tools\compiler.zip' -DestinationPath 'tools' -Force; exit 0" || goto :fail
-    set GCC=tools\mingw64\bin\g++.exe
-    if not exist "%GCC%" for /f "delims=" %%D in ('dir /b /ad tools ^| findstr /i mingw') do set GCC=tools\%%D\bin\g++.exe
-    if not exist "%GCC%" (echo [X] compiler not found & goto :fail)
-)
-
-echo [3/7] Checking UI library...
-if not exist deps mkdir deps
-if not exist deps\imgui mkdir deps\imgui
-if not exist deps\imgui\backends mkdir deps\imgui\backends
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/'; try{ foreach($x in @('imgui.cpp','imgui.h','imgui_internal.h','imgui_draw.cpp','imgui_tables.cpp','imgui_widgets.cpp','imconfig.h','imstb_rectpack.h','imstb_textedit.h','imstb_truetype.h')){ if(-not (Test-Path ('deps\imgui\'+$x))){ Invoke-WebRequest -Uri ($u+$x) -OutFile ('deps\imgui\'+$x) } }; foreach($x in @('imgui_impl_dx11.cpp','imgui_impl_dx11.h','imgui_impl_win32.cpp','imgui_impl_win32.h')){ if(-not (Test-Path ('deps\imgui\backends\'+$x))){ Invoke-WebRequest -Uri ($u+'backends/'+$x) -OutFile ('deps\imgui\backends\'+$x) } }; if(-not (Test-Path 'deps\json.hpp')){ Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp' -OutFile 'deps\json.hpp' }; Write-Host '       UI files OK'; exit 0 }catch{ exit 1 }" || goto :fail
-for %%H in (imconfig.h imstb_rectpack.h imstb_textedit.h imstb_truetype.h imgui.cpp imgui.h imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp) do ( if not exist "deps\imgui\%%H" (echo [X] deps\imgui\%%H missing & goto :fail) )
-
-echo [4/7] Checking DMA engine...
-if exist vmm.dll (
-    echo       OK.
-) else (
-    echo       downloading DMA engine - ONE TIME ONLY...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try{ $rel=Invoke-RestMethod -Uri 'https://api.github.com/repos/ufrisk/MemProcFS/releases/latest' }catch{ exit 1 }; $files=@(); $rest=@(); foreach($x in @($rel.assets)){ if($x.name -like '*.zip'){ if($x.name -like '*files*'){ $files += $x } else { $rest += $x } } }; $cand = @($files | Sort-Object -Property size) + @($rest | Sort-Object -Property size); $done=$false; foreach($a in $cand){ try{ Invoke-WebRequest -Uri $a.browser_download_url -OutFile 'vmm_pack.zip' }catch{ continue }; try{ if(Test-Path 'vmm_unpack'){ Remove-Item -Recurse -Force 'vmm_unpack' }; Expand-Archive -Path vmm_pack.zip -DestinationPath vmm_unpack -Force }catch{ continue }; $v=Get-ChildItem -Path vmm_unpack -Recurse -Filter vmm.dll | Select-Object -First 1; if($v){ Copy-Item $v.FullName vmm.dll -Force; foreach($n in @('leechcore.dll','ftd3xx.dll')){ $f=Get-ChildItem -Path vmm_unpack -Recurse -Filter $n | Select-Object -First 1; if($f){ Copy-Item $f.FullName $n -Force } }; $done=$true; break } }; if(-not $done){ exit 1 }; exit 0" || goto :fail
-)
+echo [2/7] Checking locked compiler...
+set "GCC=tools\mingw64\bin\g++.exe"
+call :run_build_guard Dependencies
+if errorlevel 1 goto :fail
 
 set BUILD_EXE=loader.build.tmp.exe
 if exist "%BUILD_EXE%" del /q "%BUILD_EXE%"
@@ -78,9 +53,12 @@ mkdir dist 2>nul
 copy /y "%BUILD_EXE%" dist\loader.exe >nul
 if errorlevel 1 goto :fail
 del /q "%BUILD_EXE%" >nul 2>&1
-if exist vmm.dll copy /y vmm.dll dist\vmm.dll >nul
-if exist leechcore.dll copy /y leechcore.dll dist\leechcore.dll >nul
-if exist ftd3xx.dll copy /y ftd3xx.dll dist\ftd3xx.dll >nul
+for %%D in (vmm.dll leechcore.dll ftd3xx.dll) do (
+    if not exist "%%D" (echo [X] Required runtime %%D missing & goto :fail)
+    copy /y "%%D" "dist\%%D" >nul
+    if errorlevel 1 goto :fail
+    if not exist "dist\%%D" (echo [X] Required packaged runtime %%D missing & goto :fail)
+)
 if not exist assets\collision\dl_midtown.acecol (echo [X] Midtown collision asset missing & goto :fail)
 if not exist assets\collision\hero_testing.acecol (echo [X] Hero Testing collision asset missing & goto :fail)
 xcopy /e /i /y assets\collision dist\assets\collision >nul
@@ -122,7 +100,7 @@ exit /b %ERRORLEVEL%
 :ACE_BUILD_GUARD_BEGIN
 param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
-    [ValidateSet('Run','Begin','Validate','Extract','Prepare','Compiled','Verify','Failed')][string]$Mode='Validate'
+    [ValidateSet('Run','Begin','Validate','Extract','Dependencies','Runtime','Prepare','Compiled','Verify','Failed')][string]$Mode='Validate'
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
@@ -130,6 +108,11 @@ $utf8=New-Object Text.UTF8Encoding($false,$true)
 $root=[IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\','/')
 $resultPath=Join-Path $root '.ace-build-result.json'
 $receiptPath=Join-Path $root '.ace-extraction.json'
+$runtimeNames=@('vmm.dll','leechcore.dll','ftd3xx.dll')
+$dependencyLockJson=@'
+{"baseline":"Existing local dependency bytes observed 2026-11-02","compiler":{"archive_path":"tools/compiler.zip","assets_page":"https://github.com/brechtsanders/winlibs_mingw/releases/expanded_assets/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1","bytes":197015246,"executable_path":"tools/mingw64/bin/g++.exe","executable_sha256":"8a4a2f65a6b6e7ae70ab4b68ca4238188dbea382f1d24f4ae6c83ee8bee33016","installed_directory":"tools/mingw64","release_page":"https://github.com/brechtsanders/winlibs_mingw/releases/tag/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1","sha256":"462d67f17fd99a7c749056712a3afff27a0f794b256af9f69d15ac8418630d56","upstream_digest_correlated":false,"url":"https://github.com/brechtsanders/winlibs_mingw/releases/download/14.0.0-snapshot20231217posix-11.0.1-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-14.0.0-snapshot20231217-mingw-w64msvcrt-11.0.1-r1.zip","version":"GCC 14.0.0-snapshot20231217 / MinGW-w64 MSVCRT 11.0.1-r1"},"provenance":{"compiler":"Versioned asset is listed on the official WinLibs GitHub release. Expected archive SHA256 was measured locally; upstream checksum text could not be retrieved by the web tool.","limitations":"Content lock and fail-closed acquisition. No new archive was downloaded or executed. This does not prove full bit-for-bit build reproducibility, upstream signatures, hardware operation, or that prior tests used these exact bytes.","runtime":"Official MemProcFS v5.19 expanded-assets metadata advertises the same SHA256 as the retained local archive.","source_files":"Versioned URLs are already used by the current build; expected individual SHA256 values were measured from current local bytes."},"runtime":{"archive_path":"vmm_pack.zip","assets_page":"https://github.com/ufrisk/MemProcFS/releases/expanded_assets/v5.19","bytes":6737710,"files":[{"bytes":2628552,"file_version":"5.19.0.251","path":"vmm.dll","sha256":"1bfa5e308f18b61d38f9471aad5d2801410cae608e3e274242e7e788838a12df"},{"bytes":180680,"file_version":"2.23.4.104","path":"leechcore.dll","sha256":"87b69a036772e58d6d9297982f6029d02ea0dbaf98c91f366e3fbb28f6045673"},{"bytes":513928,"file_version":"1.3.0.10","path":"ftd3xx.dll","sha256":"3c0fc158fd4aa604c526d58ed8274ae830d53e69e01210cc5b5fa54ec5a9b7c0"}],"release_page":"https://github.com/ufrisk/MemProcFS/releases/tag/v5.19","sha256":"5dc42673f35371e309b2c3f5c302556489897451a90905061035b630239d3ca9","upstream_digest_correlated":true,"url":"https://github.com/ufrisk/MemProcFS/releases/download/v5.19/MemProcFS_files_and_binaries_v5.19.0-win_x64-20261014.zip","version":"MemProcFS 5.19.0 / LeechCore 2.23.4.104 / FTD3XX 1.3.0.10"},"schema":1,"source_files":[{"bytes":919975,"path":"deps/json.hpp","sha256":"9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6","url":"https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp"},{"bytes":803634,"path":"deps/imgui/imgui.cpp","sha256":"594831847b5e0c95d15554c61c47a9e204d9ce87deed0b504e9c661a31bdb28c","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui.cpp"},{"bytes":328809,"path":"deps/imgui/imgui.h","sha256":"8470a6ba7841f0f2ddd50e137005079b27d6f61021c5372a72a628e6d8d27f08","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui.h"},{"bytes":262687,"path":"deps/imgui/imgui_internal.h","sha256":"8304c957f0452f01d23ea951f39e9a94ddb61cd63f26f2ce8c6e5dc44d199d90","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_internal.h"},{"bytes":221080,"path":"deps/imgui/imgui_draw.cpp","sha256":"8f4867550086b3bd8444f232098b85a526c27dafb4df7ade772bc73cf8c217ec","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_draw.cpp"},{"bytes":237948,"path":"deps/imgui/imgui_tables.cpp","sha256":"f2ed29a8eb6ef19883a80bf1727120ed2962c0a28e584d4cf70f34f8d061f567","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_tables.cpp"},{"bytes":443296,"path":"deps/imgui/imgui_widgets.cpp","sha256":"9d8a13aae4a217966cdbfc784bec4b9b2abe9bc2290a8ddffd2c4d117b2917bb","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imgui_widgets.cpp"},{"bytes":10507,"path":"deps/imgui/imconfig.h","sha256":"a253e82c1960f8aa7594a51a8ac606a6235738c923f12d67a7742e88bf07ed63","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imconfig.h"},{"bytes":20344,"path":"deps/imgui/imstb_rectpack.h","sha256":"2efa3d5f7d003c19743b15155dad9f46d9f9fc783a18893d703b431d3c990972","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_rectpack.h"},{"bytes":55207,"path":"deps/imgui/imstb_textedit.h","sha256":"6cb9de88e714f42bdbdc25ba190f01e346a2b6eba727c2044acccc7e70966c70","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_textedit.h"},{"bytes":199484,"path":"deps/imgui/imstb_truetype.h","sha256":"5b7693f174b0458c7bec5522c8d6be4fe606d3f5da5082351959c14e59269b53","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/imstb_truetype.h"},{"bytes":29334,"path":"deps/imgui/backends/imgui_impl_dx11.cpp","sha256":"c568d1637e5c0b53f74ebc5ad527050e39183da53b95bb215139b138ff80be57","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_dx11.cpp"},{"bytes":1538,"path":"deps/imgui/backends/imgui_impl_dx11.h","sha256":"f9d3d41f7db6d9e8f380fdd05b62c6ddaec6c5813ffa879e541816f49a50c1b8","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_dx11.h"},{"bytes":46165,"path":"deps/imgui/backends/imgui_impl_win32.cpp","sha256":"677ed71e7d7d44cf0693ecd6a480366121885e7c1ee19ae3bdd7d6a5ea230a2f","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_win32.cpp"},{"bytes":3433,"path":"deps/imgui/backends/imgui_impl_win32.h","sha256":"02e1762148172d480cfdef1dab08ee7255ffade2a445379fdd005a301bf28214","url":"https://raw.githubusercontent.com/ocornut/imgui/v1.90.4/backends/imgui_impl_win32.h"}]}
+'@
+$dependencyLock=$dependencyLockJson|ConvertFrom-Json
 
 function Require([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
 function Hash-Bytes([byte[]]$Bytes){$h=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($h.ComputeHash($Bytes))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}
@@ -300,6 +283,215 @@ function Verify-SourceSnapshot($Snapshot){
     }
 }
 
+$dependencyLockSha256=Hash-Bytes ($utf8.GetBytes($dependencyLockJson))
+Require ($dependencyLock.schema -eq 1 -and @($dependencyLock.source_files).Count -eq 15 -and @($dependencyLock.runtime.files).Count -eq 3) 'Invalid embedded dependency lock'
+
+function Dependency-Path([string]$Relative){
+    Require (-not [IO.Path]::IsPathRooted($Relative) -and $Relative -notmatch '[:\x00]') ('Unsafe dependency path: '+$Relative)
+    $parts=$Relative.Replace('\','/').Split('/')
+    foreach($part in $parts){Require ($part.Length -gt 0 -and $part -ne '.' -and $part -ne '..') ('Unsafe dependency path component: '+$Relative)}
+    $path=[IO.Path]::GetFullPath((Join-Path $root ($parts -join '\')))
+    Require ($path.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) ('Dependency path escaped project root: '+$Relative)
+    return $path
+}
+function Ensure-DependencyDirectory([string]$Path){
+    $full=[IO.Path]::GetFullPath($Path)
+    Require ($full -ieq $root -or $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) 'Dependency directory escaped project root'
+    if(Test-Path -LiteralPath $full){Regular $full $true;return}
+    Ensure-DependencyDirectory ([IO.Path]::GetDirectoryName($full))
+    $null=[IO.Directory]::CreateDirectory($full);Regular $full $true
+}
+function Assert-LockedFile([string]$Path,$Spec){
+    Regular $Path
+    Require ([string]$Spec.sha256 -cmatch '^[0-9a-f]{64}$') ('Invalid locked digest: '+$Path)
+    Require ((Get-Item -LiteralPath $Path).Length -eq [long]$Spec.bytes -and [long]$Spec.bytes -gt 0) ('Locked dependency length differs: '+$Path)
+    $actual=Hash-File $Path
+    Require ($actual -ceq [string]$Spec.sha256) ('Locked dependency SHA256 differs: '+$Path+'. Preserve/rename it and restore the approved version; the build will not overwrite a mismatched existing file.')
+    return $actual
+}
+function Ensure-LockedDownload($Spec,[string]$Relative){
+    $path=Dependency-Path $Relative
+    Ensure-DependencyDirectory ([IO.Path]::GetDirectoryName($path))
+    if(Test-Path -LiteralPath $path){$null=Assert-LockedFile $path $Spec;return $path}
+    Require ([string]$Spec.url -cmatch '^https://') ('A locked HTTPS URL is required: '+$Relative)
+    $temporary=Join-Path ([IO.Path]::GetDirectoryName($path)) ('.ace-download-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    Require (-not (Test-Path -LiteralPath $temporary)) 'Fresh dependency download path already exists'
+    try{
+        Write-Host ('       Downloading locked dependency: '+$Relative)
+        Invoke-WebRequest -Uri ([string]$Spec.url) -OutFile $temporary -UseBasicParsing -ErrorAction Stop
+        $null=Assert-LockedFile $temporary $Spec
+        Require (-not (Test-Path -LiteralPath $path)) ('Dependency destination appeared during download: '+$path)
+        [IO.File]::Move($temporary,$path)
+        $null=Assert-LockedFile $path $Spec
+        return $path
+    }finally{
+        if(Test-Path -LiteralPath $temporary){Regular $temporary;[IO.File]::Delete($temporary)}
+    }
+}
+function New-DependencyStage([string]$Kind){
+    Require ($Kind -eq 'compiler' -or $Kind -eq 'runtime') 'Invalid dependency staging kind'
+    $stage=Child ('.ace-dependency-'+$Kind+'-'+[Guid]::NewGuid().ToString('N'))
+    Require (-not (Test-Path -LiteralPath $stage)) 'Fresh dependency stage already exists'
+    $null=[IO.Directory]::CreateDirectory($stage);Regular $stage $true
+    return $stage
+}
+function Remove-DependencyStage([string]$Stage){
+    $full=[IO.Path]::GetFullPath($Stage)
+    Require ([IO.Path]::GetDirectoryName($full) -ieq $root -and [IO.Path]::GetFileName($full) -cmatch '^\.ace-dependency-(compiler|runtime)-[0-9a-f]{32}$') 'Refusing unsafe dependency cleanup path'
+    Regular $full $true
+    foreach($item in @(Get-ChildItem -LiteralPath $full -Recurse -Force)){Regular $item.FullName ([bool]$item.PSIsContainer)}
+    Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+}
+function Zip-Target([string]$Base,[string]$Name){
+    Require (-not [IO.Path]::IsPathRooted($Name) -and $Name -notmatch '[:\x00\\]') ('Unsafe archive entry: '+$Name)
+    $relative=$Name.TrimEnd('/')
+    Require ($relative.Length -gt 0) 'Empty archive entry'
+    foreach($part in $relative.Split('/')){Require ($part.Length -gt 0 -and $part -ne '.' -and $part -ne '..') ('Unsafe archive entry component: '+$Name)}
+    $baseFull=[IO.Path]::GetFullPath($Base).TrimEnd('\')
+    $target=[IO.Path]::GetFullPath((Join-Path $baseFull $relative.Replace('/','\')))
+    Require ($target.StartsWith($baseFull+'\',[StringComparison]::OrdinalIgnoreCase)) ('Archive entry escaped staging directory: '+$Name)
+    return $target
+}
+function Assert-ZipTargets([string]$Archive,[string]$Base,[bool]$Compiler=$false){
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
+    try{
+        $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach($entry in $zip.Entries){
+            $target=Zip-Target $Base $entry.FullName
+            Require ($seen.Add($target)) ('Duplicate/case-colliding archive entry: '+$entry.FullName)
+            if($Compiler){Require ($entry.FullName -ceq 'mingw64/' -or $entry.FullName.StartsWith('mingw64/',[StringComparison]::Ordinal)) 'Compiler archive has an unexpected top-level entry'}
+        }
+        Require ($zip.Entries.Count -gt 0) 'Dependency archive is empty'
+    }finally{$zip.Dispose()}
+}
+function Hash-Stream([IO.Stream]$Stream){
+    $hasher=[Security.Cryptography.SHA256]::Create()
+    try{return ([BitConverter]::ToString($hasher.ComputeHash($Stream))).Replace('-','').ToLowerInvariant()}finally{$hasher.Dispose()}
+}
+function Verify-LockedToolchain([string]$Archive,[string]$Base){
+    $null=Assert-LockedFile $Archive $dependencyLock.compiler
+    Regular $Base $true
+    Assert-ZipTargets $Archive $Base $true
+    $toolchain=Join-Path $Base 'mingw64';Regular $toolchain $true
+    $expected=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
+    try{
+        foreach($entry in $zip.Entries){
+            $target=Zip-Target $Base $entry.FullName
+            if($entry.FullName.EndsWith('/')){Regular $target $true;continue}
+            Regular $target
+            Require ((Get-Item -LiteralPath $target).Length -eq $entry.Length) ('Installed toolchain length differs from locked archive: '+$entry.FullName)
+            $stream=$entry.Open();try{$archiveHash=Hash-Stream $stream}finally{$stream.Dispose()}
+            Require ((Hash-File $target) -ceq $archiveHash) ('Installed toolchain differs from locked archive: '+$entry.FullName)
+            $null=$expected.Add($target)
+        }
+    }finally{$zip.Dispose()}
+    $count=0
+    foreach($item in @(Get-ChildItem -LiteralPath $toolchain -Recurse -Force)){
+        Regular $item.FullName ([bool]$item.PSIsContainer)
+        if(-not $item.PSIsContainer){$count++;Require ($expected.Contains($item.FullName)) ('Unexpected installed toolchain file: '+$item.FullName)}
+    }
+    Require ($count -eq $expected.Count) 'Installed toolchain inventory differs from locked archive'
+    $null=Assert-LockedFile $Archive $dependencyLock.compiler
+}
+function Locked-RuntimeSpec([string]$Name){
+    $runtimeSpecs=@($dependencyLock.runtime.files|Where-Object {$_.path -ceq $Name})
+    Require ($runtimeSpecs.Count -eq 1) ('Required runtime member absent/ambiguous in dependency lock: '+$Name)
+    return $runtimeSpecs[0]
+}
+function Install-LockedCompiler{
+    $archive=Ensure-LockedDownload $dependencyLock.compiler $dependencyLock.compiler.archive_path
+    $installed=Dependency-Path $dependencyLock.compiler.installed_directory
+    if(-not (Test-Path -LiteralPath $installed)){
+        $stage=New-DependencyStage 'compiler'
+        try{
+            # Check the fixed archive digest and every extraction destination before expansion.
+            $null=Assert-LockedFile $archive $dependencyLock.compiler
+            Assert-ZipTargets $archive $stage $true
+            Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force -ErrorAction Stop
+            Verify-LockedToolchain $archive $stage
+            Require (-not (Test-Path -LiteralPath $installed)) 'Compiler destination appeared while staging'
+            [IO.Directory]::Move((Join-Path $stage 'mingw64'),$installed)
+            Remove-DependencyStage $stage
+        }catch{Write-Warning ('Compiler staging was not installed; retained when available at '+$stage);throw}
+    }
+    Regular $installed $true
+    $compiler=Dependency-Path $dependencyLock.compiler.executable_path;Regular $compiler
+    Require ((Hash-File $compiler) -ceq $dependencyLock.compiler.executable_sha256) 'Selected compiler executable differs from the dependency lock'
+    Write-Host ('       Locked compiler selected: '+$dependencyLock.compiler.version)
+}
+function Install-LockedRuntime{
+    $missing=$false
+    foreach($dll in $runtimeNames){
+        $path=Child $dll
+        if(Test-Path -LiteralPath $path){$null=Assert-LockedFile $path (Locked-RuntimeSpec $dll)}else{$missing=$true}
+    }
+    if($missing){
+        $archive=Ensure-LockedDownload $dependencyLock.runtime $dependencyLock.runtime.archive_path
+        $stage=New-DependencyStage 'runtime'
+        try{
+            $null=Assert-LockedFile $archive $dependencyLock.runtime
+            Assert-ZipTargets $archive $stage
+            Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force -ErrorAction Stop
+            $payload=$null
+            foreach($v in @(Get-ChildItem -LiteralPath $stage -Recurse -File -Filter 'vmm.dll')){
+                $set=@{}
+                try{foreach($dll in $runtimeNames){$path=Join-Path $v.DirectoryName $dll;$null=Assert-LockedFile $path (Locked-RuntimeSpec $dll);$set[$dll]=$path}}catch{continue}
+                if($set.Count -eq $runtimeNames.Count){$payload=$set;break}
+            }
+            Require ($null -ne $payload) 'Locked runtime archive does not contain the complete approved DLL set in one directory'
+            foreach($dll in $runtimeNames){
+                $target=Child $dll
+                if(-not (Test-Path -LiteralPath $target)){[IO.File]::Copy($payload[$dll],$target,$false)}
+                $null=Assert-LockedFile $target (Locked-RuntimeSpec $dll)
+            }
+            Remove-DependencyStage $stage
+        }catch{Write-Warning ('Runtime staging was not fully installed; retained when available at '+$stage);throw}
+    }
+    foreach($dll in $runtimeNames){$null=Assert-LockedFile (Child $dll) (Locked-RuntimeSpec $dll)}
+    Write-Host '       Complete locked runtime DLL set verified.'
+}
+function Install-LockedDependencies{
+    $ProgressPreference='SilentlyContinue'
+    [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
+    Install-LockedCompiler
+    Write-Host '[3/7] Checking locked UI library...'
+    foreach($spec in $dependencyLock.source_files){$null=Ensure-LockedDownload $spec $spec.path}
+    Write-Host '       All locked UI/JSON files verified.'
+    Write-Host '[4/7] Checking locked DMA runtime...'
+    Install-LockedRuntime
+}
+function Verify-LockedDependencies{
+    $archive=Dependency-Path $dependencyLock.compiler.archive_path
+    Write-Host 'Verifying complete installed toolchain against its locked archive...'
+    Verify-LockedToolchain $archive ([IO.Path]::GetDirectoryName((Dependency-Path $dependencyLock.compiler.installed_directory)))
+    foreach($spec in $dependencyLock.source_files){$null=Assert-LockedFile (Dependency-Path $spec.path) $spec}
+    foreach($dll in $runtimeNames){$null=Assert-LockedFile (Child $dll) (Locked-RuntimeSpec $dll)}
+}
+
+function Snapshot-Runtime{
+    $hashes=[ordered]@{}
+    foreach($dll in $runtimeNames){
+        $path=Child $dll;Regular $path
+        Require ((Get-Item -LiteralPath $path).Length -gt 0) ('Required runtime DLL is empty: '+$dll)
+        $hashes[$dll]=Assert-LockedFile $path (Locked-RuntimeSpec $dll)
+    }
+    return $hashes
+}
+function Verify-RuntimeSnapshot($Snapshot,[string]$Directory=$root){
+    Require ($null -ne $Snapshot -and @($Snapshot.PSObject.Properties).Count -eq $runtimeNames.Count) 'Current build receipt must identify every required runtime DLL'
+    Regular $Directory $true
+    foreach($dll in $runtimeNames){
+        Require ($null -ne $Snapshot.PSObject.Properties[$dll]) ('Runtime snapshot is missing: '+$dll)
+        $expected=[string]$Snapshot.$dll
+        Require ($expected -cmatch '^[0-9a-f]{64}$') ('Invalid runtime snapshot digest: '+$dll)
+        $path=Join-Path $Directory $dll;Regular $path
+        Require ((Get-Item -LiteralPath $path).Length -gt 0) ('Required runtime DLL is empty: '+$dll)
+        Require ((Hash-File $path) -ceq $expected) ('Required runtime DLL changed or differs from prepared input: '+$path)
+    }
+}
+
 try{
     Check-Root
     if($Mode -eq 'Run'){
@@ -365,20 +557,29 @@ try{
             Write-Host ($parsed.files.Count.ToString()+' unique source blocks staged, hash-checked and extracted.')
             if(Test-Path -LiteralPath $backup){Write-Host ('Previous generated source retained at '+$backup)}
         }
+    }elseif($Mode -eq 'Dependencies'){
+        Install-LockedDependencies
+    }elseif($Mode -eq 'Runtime'){
+        $null=Snapshot-Runtime
+        Write-Host 'Required runtime DLL set is present and nonempty.'
     }elseif($Mode -eq 'Prepare'){
-        $receipt=Read-Extraction;$hashes=Snapshot-Source $receipt
+        $receipt=Read-Extraction;$hashes=Snapshot-Source $receipt;$runtime=Snapshot-Runtime
+        Verify-LockedDependencies
         $meta=Read-Json (Join-Path (Child 'src') 'build-info.json')
         Require ($meta.source_sha256 -ceq (Source-Digest $receipt)) 'Generated metadata does not identify extracted source/build inputs'
-        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='compiling';source_extracted=$true;product_compiled=$false;verified_product=$false;source_count=$receipt.count;source_tree_sha256=$hashes;build_id=$meta.build_id;utc=[DateTime]::UtcNow.ToString('o')})
+        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='compiling';source_extracted=$true;product_compiled=$false;verified_product=$false;source_count=$receipt.count;source_tree_sha256=$hashes;runtime_sha256=$runtime;dependency_lock_sha256=$dependencyLockSha256;build_id=$meta.build_id;utc=[DateTime]::UtcNow.ToString('o')})
     }elseif($Mode -eq 'Compiled'){
         $receipt=Read-Extraction
         $prepared=Read-Json $resultPath
         Require ($prepared.state -eq 'compiling') 'No current pre-compile source snapshot'
         Verify-SourceSnapshot $prepared.source_tree_sha256
+        Verify-RuntimeSnapshot $prepared.runtime_sha256
+        Require ($prepared.dependency_lock_sha256 -ceq $dependencyLockSha256) 'Dependency lock changed after preparation'
+        Verify-LockedDependencies
         $product=Child 'loader.build.tmp.exe';Regular $product
         Require ((Get-Item -LiteralPath $product).Length -gt 0) 'Compiler output is empty'
         Require (Has-BuildId $product $prepared.build_id) 'Compiler output does not contain this stamped build ID; refusing stale executable'
-        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='compiled';source_extracted=$true;product_compiled=$true;verified_product=$false;source_count=$receipt.count;source_tree_sha256=$prepared.source_tree_sha256;build_id=$prepared.build_id;product_sha256=(Hash-File $product);utc=[DateTime]::UtcNow.ToString('o')})
+        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='compiled';source_extracted=$true;product_compiled=$true;verified_product=$false;source_count=$receipt.count;source_tree_sha256=$prepared.source_tree_sha256;runtime_sha256=$prepared.runtime_sha256;dependency_lock_sha256=$dependencyLockSha256;build_id=$prepared.build_id;product_sha256=(Hash-File $product);utc=[DateTime]::UtcNow.ToString('o')})
     }elseif($Mode -eq 'Verify'){
         $receipt=Read-Extraction;$compiled=Read-Json $resultPath
         Require ($compiled.state -eq 'compiled' -and $compiled.product_compiled -eq $true) 'No compiler-completion receipt for this attempt'
@@ -386,10 +587,9 @@ try{
         $dist=Child 'dist';Regular $dist $true
         $product=Join-Path $dist 'loader.exe';Regular $product
         Require ((Hash-File $product) -ceq $compiled.product_sha256) 'Packaged executable differs from compiler output'
-        foreach($dll in @('vmm.dll','leechcore.dll','ftd3xx.dll')){
-            $input=Child $dll
-            if(Test-Path -LiteralPath $input){Regular $input;$copy=Join-Path $dist $dll;Regular $copy;Require ((Hash-File $input) -ceq (Hash-File $copy)) ('Runtime DLL copy differs: '+$dll)}
-        }
+        Require ($compiled.dependency_lock_sha256 -ceq $dependencyLockSha256) 'Dependency lock differs from the compiled receipt'
+        Verify-RuntimeSnapshot $compiled.runtime_sha256
+        Verify-RuntimeSnapshot $compiled.runtime_sha256 $dist
         foreach($relative in @('assets/collision/dl_midtown.acecol','assets/collision/hero_testing.acecol','assets/radar/maps.json','assets/radar/dl_midtown.png')){
             $input=Join-Path $root $relative;$copy=Join-Path $dist $relative
             Regular $input;Regular $copy
@@ -403,7 +603,7 @@ try{
         Require ($meta.source_sha256 -ceq $sourceDigest) 'Packaged metadata does not identify extracted source/build inputs'
         $dev=Child 'loader.exe';$devUpdated=$false
         if(Test-Path -LiteralPath $dev){Regular $dev;$devUpdated=(Hash-File $dev) -ceq $compiled.product_sha256}
-        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='passed';source_extracted=$true;product_compiled=$true;verified_product=$true;source_count=$receipt.count;build_id=$meta.build_id;product_sha256=$compiled.product_sha256;development_copy_current=$devUpdated;verified_product_path=$product;utc=[DateTime]::UtcNow.ToString('o')})
+        Write-AtomicJson $resultPath ([ordered]@{schema=1;state='passed';source_extracted=$true;product_compiled=$true;verified_product=$true;source_count=$receipt.count;build_id=$meta.build_id;product_sha256=$compiled.product_sha256;runtime_sha256=$compiled.runtime_sha256;dependency_lock_sha256=$dependencyLockSha256;development_copy_current=$devUpdated;verified_product_path=$product;utc=[DateTime]::UtcNow.ToString('o')})
         Write-Host ('Verified product: '+$product+' | build '+$meta.build_id+' | SHA256 '+$compiled.product_sha256)
         if($devUpdated){Write-Host 'Development loader.exe matches this build.'}else{Write-Warning 'Root loader.exe was not refreshed and must not be treated as this build. A lock is only one possible cause; use the verified product artifact.'}
     }elseif($Mode -eq 'Failed'){
